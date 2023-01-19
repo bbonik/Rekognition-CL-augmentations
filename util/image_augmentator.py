@@ -22,6 +22,71 @@ from skimage.transform import warp, AffineTransform
 from skimage.exposure import equalize_adapthist
 from skimage.util import random_noise
 from skimage.exposure import adjust_log
+from skimage.color import rgb2gray
+from skimage.util import img_as_float
+
+
+
+
+def adjust_image_colorfulness(image, degree):
+    # adjusts the colorfullness of an image according to the degree
+    
+    image = img_as_float(image)  # [0,1]
+    image_gray = rgb2gray(image)  # [0,1]
+    image_gray = np.dstack((image_gray, image_gray, image_gray))
+    
+    image_color_delta = image - image_gray  # deviations from gray
+    
+    image_adjusted = image_gray
+    image_adjusted = image_adjusted + image_color_delta * degree
+    
+    return cast_image_as_uint8(image_adjusted)
+
+
+
+def cast_image_as_uint8(image):
+    # converts a float image of [0,1] to an uint8 image of [0,255]
+    image *= 255
+    image[image>255] = 255
+    image[image<0] = 0
+    return image.astype(np.uint8)
+    
+
+    
+    
+
+
+def convert_image_temperature(image, degree):
+    # adjusts the color temperature of an image based on the degree
+    
+    image = img_as_float(image)  # [0,1]
+    
+    DEGREE_MIN = -1
+    DEGREE_MAX = 1
+    
+    R_COOL = 150
+    G_COOL = 200
+    B_COOL = 255
+    
+    R_WARM = 255
+    G_WARM = 200
+    B_WARM = 50
+
+    if degree < 0:
+        r = R_COOL + ((255 - R_COOL) / (0 - DEGREE_MIN)) * (degree - DEGREE_MIN)
+        g = G_COOL + ((255 - G_COOL) / (0 - DEGREE_MIN)) * (degree - DEGREE_MIN)
+        b = B_COOL + ((255 - B_COOL) / (0 - DEGREE_MIN)) * (degree - DEGREE_MIN)
+    else:
+        r = R_WARM + ((255 - R_WARM) / (DEGREE_MAX - 0)) * (DEGREE_MAX - degree)
+        g = G_WARM + ((255 - G_WARM) / (DEGREE_MAX - 0)) * (DEGREE_MAX - degree)
+        b = B_WARM + ((255 - B_WARM) / (DEGREE_MAX - 0)) * (DEGREE_MAX - degree)
+    
+    image[:,:,0] *= r / 255.0
+    image[:,:,1] *= g / 255.0
+    image[:,:,2] *= b / 255.0
+    
+    return cast_image_as_uint8(image)
+
 
 
 
@@ -87,6 +152,8 @@ def augment_image(
         range_sheer=None,
         range_noise=None,
         range_brightness=None,
+        range_colorfullness=None,
+        range_color_temperature=None,
         flip_lr = None,
         flip_ud = None,
         enhance = None,
@@ -103,7 +170,6 @@ def augment_image(
     random variations of it. If bounding boxes are provided, then they are also
     transformed to the new distorted image and returned back. The function is
     based on the scikit-image library.
-    
     
     INPUTS
     ------
@@ -144,6 +210,14 @@ def augment_image(
         Minimum and maximum range for brightness gain. 
         Value range: float(0,inf), 1=no change, <1=darken, >1=brighten, 
         e.g. (0.5, 1.5). If None, then this transformation is deactivated. 
+    range_colorfulness: (min, max) tuple of float, or None
+        Minimum and maximum range for color saturation. 
+        Value range: float[0,inf), 1=no change, 0=grayscale, >1=more saturated, 
+        e.g. (0.5, 1.5). If None, then this transformation is deactivated. 
+    range_color_temperature: (min, max) tuple of float, or None
+        Minimum and maximum range for color temperature (cool/warm). 
+        Value range: float[-1,1], -1=cool, 0=no change, 1=warm, 
+        e.g. (-0.5, 1.0). If None, then this transformation is deactivated. 
     flip_lr: string or None
         None: no left-right flipping is applied.
         'all': all images are flipped left-to-right and the original version 
@@ -185,6 +259,168 @@ def augment_image(
     '''
     
     
+    #------------------------------------------------- sanity check for ranges
+    
+    # value ranges
+    RANGE_SCALE_MIN = 0.1
+    RANGE_SCALE_MAX = 5
+    RANGE_ROTATION_MIN = -360
+    RANGE_ROTATION_MAX = 360
+    RANGE_SHEER_MIN = -360
+    RANGE_SHEER_MAX = 360
+    RANGE_NOISE_MIN = 0.0
+    RANGE_NOISE_MAX = 3
+    RANGE_BRIGHTNESS_MIN = 0.1
+    RANGE_BRIGHTNESS_MAX = 10
+    RANGE_COLORFULLNESS_MIN = 0.0
+    RANGE_COLORFULLNESS_MAX = 5
+    RANGE_COLOR_TEMPERATURE_MIN = -1
+    RANGE_COLOR_TEMPERATURE_MAX = 1
+    BBOX_DISCARD_THR_MIN = 0
+    BBOX_DISCARD_THR_MAX = 1
+    BBOX_DISCARD_THR_DEFAULT = 0.75
+
+    if type(range_scale) is tuple:
+        if len(range_scale) != 2:
+            range_scale = None
+        else:
+            if range_scale[1] <= range_scale[0]:
+                range_scale = (range_scale[1], range_scale[0])
+            if range_scale[0] <= RANGE_SCALE_MIN:
+                range_scale = (RANGE_SCALE_MIN, range_scale[1])
+            if range_scale[1] >= RANGE_SCALE_MAX:
+                range_scale = (range_scale[0], RANGE_SCALE_MAX)
+    else:
+        range_scale = None
+                    
+    if type(range_translation) is tuple:
+        if len(range_translation) != 2:
+            range_translation = None
+        else:
+            if range_translation[1] <= range_translation[0]:
+                range_translation = (range_translation[1], range_translation[0])
+    else:
+        range_translation = None
+                 
+    if type(range_rotation) is tuple:
+        if len(range_rotation) != 2:
+            range_rotation = None
+        else:
+            if range_rotation[1] <= range_rotation[0]:
+                range_rotation = (range_rotation[1], range_rotation[0])
+            if range_rotation[0] <= RANGE_ROTATION_MIN:
+                range_rotation = (RANGE_ROTATION_MIN, range_rotation[1])
+            if range_rotation[1] >= RANGE_ROTATION_MAX:
+                range_rotation = (range_rotation[0], RANGE_ROTATION_MAX)
+    else:
+        range_rotation = None
+    
+    if type(range_sheer) is tuple:
+        if len(range_sheer) != 2:
+            range_sheer = None
+        else:
+            if range_sheer[1] <= range_sheer[0]:
+                range_sheer = (range_sheer[1], range_sheer[0])
+            if range_sheer[0] <= RANGE_SHEER_MIN:
+                range_sheer = (RANGE_SHEER_MIN, range_sheer[1])
+            if range_sheer[1] >= RANGE_SHEER_MAX:
+                range_sheer = (range_sheer[0], RANGE_SHEER_MAX)
+    else:
+        range_sheer = None
+    
+    if type(range_noise) is tuple:
+        if len(range_noise) != 2:
+            range_noise = None
+        else:
+            if range_noise[1] <= range_noise[0]:
+                range_noise = (range_noise[1], range_noise[0])
+            if range_noise[0] <= RANGE_NOISE_MIN:
+                range_noise = (RANGE_NOISE_MIN, range_noise[1])
+            if range_noise[1] >= RANGE_NOISE_MAX:
+                range_noise = (range_noise[0], RANGE_NOISE_MAX)
+    else:
+        range_noise = None
+          
+    if type(range_brightness) is tuple:
+        if len(range_brightness) != 2:
+            range_brightness = None
+        else:
+            if range_brightness[1] <= range_brightness[0]:
+                range_brightness = (range_brightness[1], range_brightness[0])
+            if range_brightness[0] <= RANGE_BRIGHTNESS_MIN:
+                range_brightness = (RANGE_BRIGHTNESS_MIN, range_brightness[1])
+            if range_brightness[1] >= RANGE_BRIGHTNESS_MAX:
+                range_brightness = (range_brightness[0], RANGE_BRIGHTNESS_MAX)
+    else:
+        range_brightness = None
+        
+    if type(range_colorfullness) is tuple:
+        if len(range_colorfullness) != 2:
+            range_colorfullness = None
+        else:
+            if range_colorfullness[1] <= range_colorfullness[0]:
+                range_colorfullness = (range_colorfullness[1], range_colorfullness[0])
+            if range_colorfullness[0] <= RANGE_COLORFULLNESS_MIN:
+                range_colorfullness = (RANGE_COLORFULLNESS_MIN, range_colorfullness[1])
+            if range_colorfullness[1] >= RANGE_COLORFULLNESS_MAX:
+                range_colorfullness = (range_colorfullness[0], RANGE_COLORFULLNESS_MAX)
+    else:
+        range_colorfullness = None
+    
+    if type(range_color_temperature) is tuple:
+        if len(range_color_temperature) != 2:
+            range_color_temperature = None
+        else:
+            if range_color_temperature[1] <= range_color_temperature[0]:
+                range_color_temperature = (range_color_temperature[1], range_color_temperature[0])
+            if range_color_temperature[0] <= RANGE_COLOR_TEMPERATURE_MIN:
+                range_color_temperature = (RANGE_COLOR_TEMPERATURE_MIN, range_color_temperature[1])
+            if range_color_temperature[1] >= RANGE_COLOR_TEMPERATURE_MAX:
+                range_color_temperature = (range_color_temperature[0], RANGE_COLOR_TEMPERATURE_MAX)
+    else:
+        range_color_temperature = None
+          
+    if type(flip_lr) is str: 
+        if (flip_lr != 'all') & (flip_lr != 'random'):
+            flip_lr = None
+            
+    if type(flip_ud) is str: 
+        if (flip_ud != 'all') & (flip_ud != 'random'):
+            flip_ud = None
+            
+    if type(enhance) is str: 
+        if (enhance != 'all') & (enhance != 'random'):
+            enhance = None
+            
+    if type(bbox_discard_thr) is float: 
+        if bbox_discard_thr<BBOX_DISCARD_THR_MIN: 
+            bbox_discard_thr = BBOX_DISCARD_THR_MIN
+        if bbox_discard_thr>BBOX_DISCARD_THR_MAX: 
+            bbox_discard_thr = BBOX_DISCARD_THR_MAX
+    else:
+        bbox_discard_thr = BBOX_DISCARD_THR_DEFAULT
+    
+
+    if type(bboxes) is list:
+        for bbox in bboxes:
+            if type(bbox) is dict:
+                keys = list(bbox.keys())
+                if (('class_id' not in keys) | 
+                    ('top' not in keys) | 
+                    ('left' not in keys) | 
+                    ('height' not in keys) | 
+                    ('width' not in keys)):
+                    
+                    print('Problem with provided bounding boxes!')
+                    print('Please make sure you include a list of dictionaries with these fields: "class_id", "top", "left", "height", "width"')
+                    print('Ignoring provided bounding boxes...')
+                    bboxes = None          
+    else:
+        bboxes = None
+
+    
+    #------------------------------------------------- 
+    
     # load image
     image = imageio.imread(image_filename)
     
@@ -206,7 +442,7 @@ def augment_image(
                 [x_down_right, y_down_right], 
                 [x_up_left, y_down_right]
                 ])
-     
+    
     #------------------------------------------------------- get random values
         
     # set random seed
@@ -289,6 +525,30 @@ def augment_image(
             high=1, 
             size=how_many
             )
+    if range_colorfullness is not None:
+        param_colorfullness = np.random.uniform(
+            low=range_colorfullness[0], 
+            high=range_colorfullness[1], 
+            size=how_many
+            )
+    else:
+        param_colorfullness = np.random.uniform(
+            low=1, 
+            high=1, 
+            size=how_many
+            )
+    if range_color_temperature is not None:
+        param_color_temperature = np.random.uniform(
+            low=range_color_temperature[0], 
+            high=range_color_temperature[1], 
+            size=how_many
+            )
+    else:
+        param_color_temperature = np.random.uniform(
+            low=0, 
+            high=0, 
+            size=how_many
+            )
     
     #-------------------------------------------- process all image variations
     
@@ -320,6 +580,18 @@ def augment_image(
                 mode = 'symmetric'
                 )
         
+        # add color temperature variations
+        image_transformed = convert_image_temperature(
+            image_transformed, 
+            degree=param_color_temperature[i]
+        )
+        
+        # add colorfullness variations
+        image_transformed = adjust_image_colorfulness(
+            image_transformed, 
+            degree=param_colorfullness[i]
+        )
+        
         # add gaussian noise
         image_transformed = random_noise(
             image_transformed, 
@@ -333,10 +605,7 @@ def augment_image(
         image_transformed = image_transformed * param_gain[i]
         
         # convert range back to [0,255]
-        image_transformed *= 255
-        image_transformed[image_transformed>255] = 255
-        image_transformed[image_transformed<0] = 0
-        image_transformed = image_transformed.astype(np.uint8)
+        image_transformed = cast_image_as_uint8(image_transformed)
         
         # add transforamtions to the dictionary 
         dc_augm['Images'].append(image_transformed)
@@ -347,6 +616,8 @@ def augment_image(
         dc_transf['Rotation'] = np.degrees(param_rot[i])
         dc_transf['Sheer'] = np.degrees(param_sheer[i])
         dc_transf['Noise'] = param_noise[i]
+        dc_transf['Colorfullness'] = param_colorfullness[i]
+        dc_transf['Color_Temperature'] = param_color_temperature[i]
         dc_transf['Brightness'] = param_gain[i]
         dc_transf['Flip_lr'] = False
         dc_transf['Flip_ud'] = False
@@ -711,12 +982,17 @@ def augment_image(
                   dc_augm['Transformations'][i]['Noise'])
             print('Brightness:', 
                   dc_augm['Transformations'][i]['Brightness'])
+            print('Colorfullness:', 
+                  dc_augm['Transformations'][i]['Colorfullness'])
+            print('Color Temperature:', 
+                  dc_augm['Transformations'][i]['Color_Temperature'])
             print('Enhance:', 
                   dc_augm['Transformations'][i]['Enhance'])
             print('Flip left->right: ', 
                   dc_augm['Transformations'][i]['Flip_lr'])
             print('Flip up->down: ', 
                   dc_augm['Transformations'][i]['Flip_ud'])
+            
             
             plt.figure()
             plt.imshow(image_transformed, interpolation='bilinear')
@@ -754,4 +1030,7 @@ def augment_image(
         del dc_augm['bboxes_discarded']
     
     return dc_augm
+
+
+
 
