@@ -14,6 +14,7 @@ import imageio
 import copy
 import random
 import numpy as np
+from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import matplotlib.colors as colors
@@ -141,9 +142,88 @@ def flip_bboxes(ls_bboxes, image_width, image_height, direction='lr'):
 
 
 
+def visualize_image(image, title=None, bboxes=None, max_number_of_classes=None):
+    """
+    ---------------------------------------------------------------------------
+           Visualizes an image with or without bounding box detections
+    ---------------------------------------------------------------------------
+    
+    INPUTS
+    ------
+    image: RGB numpy array 
+        Image array that will be visualized. 
+    title: string or None
+        The title that will be depicted on top of the image.    
+    bboxes: list of dictionaries or None
+        The list of the given bounding boxes in the image. A bounding box is 
+        defined by 5 numbers of a dictionary: {"class_id", "top", "left", 
+        "height", "width"}. For example, a possbile bounding box could be:
+        {"class_id": 0, "top": 44, "left": 394, "height": 189, "width": 147}
+        Top, left, height and width are defined in pixels.
+    max_number_of_classes: int or None
+        The maximum number of object classes. This is needed in order to have
+        a fixed color for each bounding box class when visualizing results. 
+
+    """
+    
+    # show the image
+    plt.figure()
+    plt.imshow(
+        image, 
+        vmin=0, 
+        vmax=255, 
+        interpolation='bilinear'
+    )
+    if title is not None:
+        plt.title(title)
+    plt.axis('off')
+    plt.tight_layout(True)
+    
+    # show the bounding boxes (if they are provided)
+    if bboxes is not None:
+        # set fixed colors per class using the jet color map
+        cm = plt.get_cmap('jet') 
+        if max_number_of_classes is None:
+            max_number_of_classes = len(set([ bbox['class_id'] for bbox in bboxes ]))
+        cNorm  = colors.Normalize(vmin=0, vmax=max_number_of_classes-1)
+        scalarMap = cmx.ScalarMappable(norm=cNorm, cmap=cm)
+        
+        for bbox in bboxes:
+            cls_id = int(bbox['class_id'])
+            color_val = scalarMap.to_rgba(cls_id)[0:3]  # keep only rgb, discard a
+            plt.gca().add_patch(  # depict the rectangles
+                Rectangle(
+                    xy=(bbox['left'],bbox['top']),
+                    width=bbox['width'],
+                    height=bbox['height'],
+                    linewidth=2,
+                    edgecolor=color_val,
+                    facecolor='none'
+                    )
+                )
+            plt.gca().text(  # depict the class names
+                bbox['left'],
+                bbox['top'] - 2,
+                "{:s}".format(str(bbox['class_id'])),
+                bbox=dict(facecolor=color_val, alpha=0.5),
+                fontsize=8,
+                color="white",
+            )
+    plt.show()
+
+
+
+
+
+
+
+
+
+
 def augment_image(
         image_filename,
         bboxes = None,
+        max_number_of_classes=None,
         how_many=1,
         random_seed=None,
         range_scale=None, 
@@ -180,7 +260,10 @@ def augment_image(
         defined by 5 numbers of a dictionary: {"class_id", "top", "left", 
         "height", "width"}. For example, a possbile bounding box could be:
         {"class_id": 0, "top": 44, "left": 394, "height": 189, "width": 147}
-        Top, left, height and width are defined in pixels. 
+        Top, left, height and width are defined in pixels.
+    max_number_of_classes: int or None
+        The maximum number of object classes. This is needed in order to have
+        a fixed color for each bounding box class when visualizing results. 
     how_many: int
         How many augmentations to generate per input image.
     random_seed: int
@@ -383,14 +466,20 @@ def augment_image(
     if type(flip_lr) is str: 
         if (flip_lr != 'all') & (flip_lr != 'random'):
             flip_lr = None
+    else:
+        flip_lr = None
             
     if type(flip_ud) is str: 
         if (flip_ud != 'all') & (flip_ud != 'random'):
             flip_ud = None
+    else:
+        flip_ud = None
             
     if type(enhance) is str: 
         if (enhance != 'all') & (enhance != 'random'):
             enhance = None
+    else:
+        enhance = None
             
     if type(bbox_discard_thr) is float: 
         if bbox_discard_thr<BBOX_DISCARD_THR_MIN: 
@@ -920,13 +1009,6 @@ def augment_image(
 
     if display is True:
         
-        if bboxes is not None:
-            # set fixed colors per class using the tab10 color map
-            cm = plt.get_cmap('jet') 
-            max_number_of_classes = 10
-            cNorm  = colors.Normalize(vmin=0, vmax=max_number_of_classes-1)
-            scalarMap = cmx.ScalarMappable(norm=cNorm, cmap=cm)
-        
         # show original image
         print('\nAugmenting', image_filename.split('/')[-1], end='')
         print(' [x', end='')
@@ -935,36 +1017,14 @@ def augment_image(
         if flip_ud=='all': print(' x2', end='')
         if enhance=='all': print(' x2', end='')
         print(']')
-        plt.figure()
-        plt.imshow(image, vmin=0, vmax=255)
-        plt.title('Original')
-        plt.axis('off')
-        plt.tight_layout(True)
-        if bboxes is not None:
-            for bbox in bboxes:
-                cls_id = int(bbox['class_id'])
-                color_val = scalarMap.to_rgba(cls_id)[0:3]  # keep only rgb, discard a
-                plt.gca().add_patch(
-                    Rectangle(
-                        xy=(bbox['left'],bbox['top']),
-                        width=bbox['width'],
-                        height=bbox['height'],
-                        linewidth=2,
-                        edgecolor=color_val,
-                        facecolor='none'
-                        )
-                    )
-                plt.gca().text(
-                    bbox['left'],
-                    bbox['top'] - 2,
-                    "{:s}".format(str(bbox['class_id'])),
-                    bbox=dict(facecolor=color_val, alpha=0.5),
-                    fontsize=8,
-                    color="white",
-                )
-        plt.show()
+        visualize_image(
+            image, 
+            title='Original', 
+            bboxes=bboxes, 
+            max_number_of_classes=max_number_of_classes
+        )
         
-        
+        # show augmentations
         for i,image_transformed in enumerate(dc_augm['Images']):
         
             print('\nTransformation for augmentation', i+1)
@@ -993,36 +1053,14 @@ def augment_image(
             print('Flip up->down: ', 
                   dc_augm['Transformations'][i]['Flip_ud'])
             
+            visualize_image(
+                image_transformed, 
+                title='Augmented #' + str(i+1), 
+                bboxes=dc_augm['bboxes'][i], 
+                max_number_of_classes=max_number_of_classes
+            )
             
-            plt.figure()
-            plt.imshow(image_transformed, interpolation='bilinear')
-            plt.title('Augmented #' + str(i+1))
-            # plt.tight_layout(True)
-            plt.axis('off')
             
-            if bboxes is not None:
-                for bbox in dc_augm['bboxes'][i]:
-                    cls_id = int(bbox['class_id'])
-                    color_val = scalarMap.to_rgba(cls_id)[0:3]  # keep only rgb, discard a
-                    plt.gca().add_patch(
-                    Rectangle(
-                        xy=(bbox['left'],bbox['top']),
-                        width=bbox['width'],
-                        height=bbox['height'],
-                        linewidth=2,
-                        edgecolor=color_val,
-                        facecolor='none'
-                        )
-                    )
-                    plt.gca().text(
-                        bbox['left'],
-                        bbox['top'] - 2,
-                        "{:s}".format(str(bbox['class_id'])),
-                        bbox=dict(facecolor=color_val, alpha=0.5),
-                        fontsize=8,
-                        color="white",
-                    )
-            plt.show()
     
     
     if bboxes is None: 
@@ -1034,3 +1072,113 @@ def augment_image(
 
 
 
+
+
+
+
+
+
+
+# def augment_manifest_file( 
+#     s3_uri_manifest_file,
+#     s3_uri_destination,
+#     gt_task_name,
+#     filename_postfix = 'augm_',
+    
+    
+
+
+
+
+# ):
+#     # Augment a whole dataset based on its manifest file.
+    
+    
+    
+
+    
+
+#     new_manifest = []
+#     n_samples_training_augmented = 0
+#     n_samples_training_original = 0
+#     class_histogram_train_original = np.zeros(len(CLASS_NAMES), dtype=int)
+#     class_histogram_train_augmented = np.zeros(len(CLASS_NAMES), dtype=int)
+
+#     with open(f'{LOCAL_DATASET_FOLDER}/{PREFIX_DATASET}/train-updated.manifest') as f:  # open the manifest file
+#         lines = f.readlines()
+
+#     for line in lines:
+#         line_dict = json.loads(line)  # load one json line (corresponding to one image)
+#         filename_object = Path(line_dict['source-ref'])
+#         filename = str(filename_object.name)  # filename withouth the path
+
+#         # add json line of the original image and count the examples inside it
+#         new_manifest.append(json.dumps(line_dict))
+#         n_samples_training_original += 1
+#         for j,annotation in enumerate(line_dict['retail-object-labeling']['annotations']):
+#             class_histogram_train_original[int(line_dict['retail-object-labeling']['annotations'][j]['class_id'])] += 1  # counting annotations
+
+#         # generate augmented images
+#         print('Augmenting image:',filename)
+#         image_augm = augment_affine(
+#             image_filename=f'{LOCAL_DATASET_FOLDER}/{PREFIX_DATASET}/{filename}',
+#             bboxes =line_dict['retail-object-labeling']['annotations'],
+#             how_many=AUGM_PER_IMAGE,
+#             random_seed=RANDOM_SEED,
+#             range_scale=RANGE_SCALE,
+#             range_translation=RANGE_TRANSLATION,
+#             range_rotation=RANGE_ROTATION,
+#             range_sheer=RANGE_SHEER,
+#             range_noise=RANGE_NOISE,     
+#             range_brightness=RANGE_BRIGHTNESS,   
+#             flip_lr=FLIP_LR,
+#             flip_ud=FLIP_UD,
+#             bbox_truncate = True,
+#             bbox_discard_thr = 0.85,
+#             display=False  # otherwise the notebook will be flooded with images!
+#         )
+
+#         # save augmented images locally
+#         for i,image in enumerate(image_augm['Images']):
+
+#             # new image size of augmented image
+#             image_height = image.shape[0]
+#             image_width = image.shape[1]
+#             if len(image.shape) == 3:
+#                 image_depth = image.shape[2]
+#             else:
+#                 image_depth = 1
+#             line_dict['retail-object-labeling']['image_size'] = [{"width": image_width, "height": image_height, "depth": image_depth}]
+
+#             # augmented image filename
+#             filename_no_extension = str(filename_object.stem)  # filename without extension 
+#             filename_augmented = f'{filename_no_extension}_augm_{str(i+1)}.jpg'
+#             image_augm_filename = f'{LOCAL_AUGMENTED_TRAINSET_FOLDER}/{filename_augmented}'
+#             imageio.imsave(image_augm_filename, image, quality=95)  # save locally
+#             new_filename_s3 = f's3://{BUCKET_NAME}/{PREFIX_PROJECT}/{PREFIX_DATASET}/{filename_augmented}'
+#             line_dict['source-ref'] = new_filename_s3  # add new filename to the manifest file
+
+#             # new image bounding boxes
+#             line_dict['retail-object-labeling']['annotations'] = image_augm['bboxes'][i]
+
+#             # update metadata objects
+#             line_dict['retail-object-labeling-metadata']['objects'] = [{"confidence": 0} for i in range(len(image_augm['bboxes'][i]))]
+
+#             # update class map
+#             ls_classes = [bbox['class_id'] for bbox in image_augm['bboxes'][i]]
+#             unique_classes = set(ls_classes)
+#             dict_new_class_map = { str(cl): CLASS_NAMES[cl] for cl in unique_classes}
+#             line_dict['retail-object-labeling-metadata']['class-map'] = dict_new_class_map
+
+#             # add a new json line for this augmentation image
+#             new_manifest.append(json.dumps(line_dict))
+
+#             n_samples_training_augmented += 1  # count training images
+#             for j,annotation in enumerate(line_dict['retail-object-labeling']['annotations']):
+#                 class_histogram_train_augmented[int(line_dict['retail-object-labeling']['annotations'][j]['class_id'])] += 1  # count annotations
+
+
+#     # save the updated training manifest file locally
+#     with open(f"{LOCAL_AUGMENTED_TRAINSET_FOLDER}/train-augmented.manifest", "w") as f:
+#         for line in new_manifest:
+#             f.write(f"{line}\n")  
