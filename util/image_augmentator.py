@@ -239,14 +239,15 @@ def augment_image(
         enhance = None,
         bbox_truncate = True,
         bbox_discard_thr = 0.75,
-        display=False
+        display=False,
+        verbose=False
         ):
     
     '''
     ---------------------------------------------------------------------------
-      Function that generates random affine augmentations for a given image
+      Functiont that generates random affine augmentations for a given image
     ---------------------------------------------------------------------------
-    The function applies affine distortions on a given image and generates many
+    The function apply affine distortions on a given image and generates many
     random variations of it. If bounding boxes are provided, then they are also
     transformed to the new distorted image and returned back. The function is
     based on the scikit-image library.
@@ -254,7 +255,8 @@ def augment_image(
     INPUTS
     ------
     image_filename: string
-        Filename of the input image.
+        Filename of the input image. The image can be either color (RGB) or
+        grayscale. If grayscale, then the image will be converted to RGB. 
     bboxes: list of dictionaries or None
         The list of the given bounding boxes in the image. A bounding box is 
         defined by 5 numbers of a dictionary: {"class_id", "top", "left", 
@@ -264,6 +266,8 @@ def augment_image(
     max_number_of_classes: int or None
         The maximum number of object classes. This is needed in order to have
         a fixed color for each bounding box class when visualizing results. 
+        If None, then the colors of bounding boxes will be different across
+        images. 
     how_many: int
         How many augmentations to generate per input image.
     random_seed: int
@@ -271,11 +275,12 @@ def augment_image(
         reproducibility.
     range_scale: (min, max) tuple of float, or None
         Minimum and maximum range of possible zooming/unzooming scale factors. 
-        Value range: float(0,inf), <1=zoom in, >1=zoom out, e.g. (0.5,1.5). 
+        Value range: float[0.1, 5], <1=zoom in, >1=zoom out, e.g. (0.5,1.5). 
         If None, then this transformation is deactivated. 
     range_translation: (min, max) tuple of integer, or None
         Minimum and maximum range for offseting the (x,y) position of the image 
-        (in pixels). Value range: int[0,inf), e.g. (-100, 100). 
+        (in pixels). Value range: int[0,image_min_dim], where image_min_dim is 
+        the smallest dimension between width and hight. E.g. value (-100, 100). 
         If None, then this transformation is deactivated. 
     range_rotation: (min, max) tuple of float, or None
         Minimum and maximum range for rotating image left/right (in degrees). 
@@ -287,15 +292,15 @@ def augment_image(
         If None, then this transformation is deactivated.
     range_noise: (min, max) tuple of float, or None
         Minimum and maximum range of noise variance. 
-        Value range: float[0,inf), e.g. (0, 0.001). 
+        Value range: float[0,3], e.g. (0, 0.001). 
         If None, then this transformation is deactivated. 
     range_brightness: (min, max) tuple of float, or None
         Minimum and maximum range for brightness gain. 
-        Value range: float(0,inf), 1=no change, <1=darken, >1=brighten, 
+        Value range: float[0.1,10], 1=no change, <1=darken, >1=brighten, 
         e.g. (0.5, 1.5). If None, then this transformation is deactivated. 
     range_colorfulness: (min, max) tuple of float, or None
         Minimum and maximum range for color saturation. 
-        Value range: float[0,inf), 1=no change, 0=grayscale, >1=more saturated, 
+        Value range: float[0,5], 1=no change, 0=grayscale, >1=more saturated, 
         e.g. (0.5, 1.5). If None, then this transformation is deactivated. 
     range_color_temperature: (min, max) tuple of float, or None
         Minimum and maximum range for color temperature (cool/warm). 
@@ -330,6 +335,8 @@ def augment_image(
         whereas values closer to 0 are more permissive. 
     display: boolean
         Show visualizations and details or not.
+    verbose: boolean
+        Show or not warnings and other messages. 
     
     OUTPUT
     ------
@@ -341,12 +348,21 @@ def augment_image(
         
     '''
     
+    # load image
+    image = imageio.imread(image_filename)
+    image_min_dim = min(image.shape[0], image.shape[1])
+    if len(image.shape) == 2:
+        image = np.dstack((image, image, image))
+    
+    # print(image.shape)
     
     #------------------------------------------------- sanity check for ranges
     
     # value ranges
     RANGE_SCALE_MIN = 0.1
     RANGE_SCALE_MAX = 5
+    RANGE_TRANSLATION_MIN = -image_min_dim
+    RANGE_TRANSLATION_MAX = image_min_dim
     RANGE_ROTATION_MIN = -360
     RANGE_ROTATION_MAX = 360
     RANGE_SHEER_MIN = -360
@@ -355,141 +371,168 @@ def augment_image(
     RANGE_NOISE_MAX = 3
     RANGE_BRIGHTNESS_MIN = 0.1
     RANGE_BRIGHTNESS_MAX = 10
-    RANGE_COLORFULNESS_MIN = 0.0
-    RANGE_COLORFULNESS_MAX = 5
+    RANGE_colorfulness_MIN = 0.0
+    RANGE_colorfulness_MAX = 5
     RANGE_COLOR_TEMPERATURE_MIN = -1
     RANGE_COLOR_TEMPERATURE_MAX = 1
     BBOX_DISCARD_THR_MIN = 0
     BBOX_DISCARD_THR_MAX = 1
-    BBOX_DISCARD_THR_DEFAULT = 0.75
-
+    BBOX_DISCARD_THR_DEFAULT = 0.85
+    
+    param = {
+        'range_scale': {'flag':0, 'min':RANGE_SCALE_MIN, 'max':RANGE_SCALE_MAX},
+        'range_translation': {'flag':0, 'min':RANGE_TRANSLATION_MIN, 'max':RANGE_TRANSLATION_MAX},
+        'range_rotation': {'flag':0, 'min':RANGE_ROTATION_MIN, 'max':RANGE_ROTATION_MAX},
+        'range_sheer': {'flag':0, 'min':RANGE_SHEER_MIN, 'max':RANGE_SHEER_MAX},
+        'range_noise': {'flag':0, 'min':RANGE_NOISE_MIN, 'max':RANGE_NOISE_MAX},
+        'range_brightness': {'flag':0, 'min':RANGE_BRIGHTNESS_MIN, 'max':RANGE_BRIGHTNESS_MAX},
+        'range_colorfulness': {'flag':0, 'min':RANGE_colorfulness_MIN, 'max':RANGE_colorfulness_MAX},
+        'range_color_temperature': {'flag':0, 'min':RANGE_COLOR_TEMPERATURE_MIN, 'max':RANGE_COLOR_TEMPERATURE_MAX},
+        'flip_lr': {'flag':0},
+        'flip_ud': {'flag':0},
+        'enhance': {'flag':0},
+        'bbox_discard_thr': {'flag':0},
+        'bboxes': {'flag':0}
+    }
+        
+    # checking range_scale
     if type(range_scale) is tuple:
-        if len(range_scale) != 2:
-            range_scale = None
+        if len(range_scale) != 2: param['range_scale']['flag'] = 1
         else:
             if range_scale[1] <= range_scale[0]:
                 range_scale = (range_scale[1], range_scale[0])
-            if range_scale[0] <= RANGE_SCALE_MIN:
+            if range_scale[0] < RANGE_SCALE_MIN:
                 range_scale = (RANGE_SCALE_MIN, range_scale[1])
-            if range_scale[1] >= RANGE_SCALE_MAX:
+                param['range_scale']['flag'] = 2
+            if range_scale[1] > RANGE_SCALE_MAX:
                 range_scale = (range_scale[0], RANGE_SCALE_MAX)
-    else:
-        range_scale = None
-                    
+                param['range_scale']['flag'] = 2
+    elif range_scale is not None: param['range_scale']['flag'] = 1
+    
+    # checking range_translation
     if type(range_translation) is tuple:
-        if len(range_translation) != 2:
-            range_translation = None
+        if len(range_translation) != 2: param['range_translation']['flag'] = 1
         else:
             if range_translation[1] <= range_translation[0]:
                 range_translation = (range_translation[1], range_translation[0])
-    else:
-        range_translation = None
-                 
+            if range_translation[0] < RANGE_TRANSLATION_MIN:
+                range_translation = (RANGE_TRANSLATION_MIN, range_translation[1])
+                param['range_translation']['flag'] = 2
+            if range_translation[1] > RANGE_TRANSLATION_MAX:
+                range_translation = (range_translation[0], RANGE_TRANSLATION_MAX)
+                param['range_translation']['flag'] = 2
+    elif range_translation is not None: param['range_translation']['flag'] = 1
+    
+    # checking range_rotation
     if type(range_rotation) is tuple:
-        if len(range_rotation) != 2:
-            range_rotation = None
+        if len(range_rotation) != 2: param['range_rotation']['flag'] = 1
         else:
             if range_rotation[1] <= range_rotation[0]:
                 range_rotation = (range_rotation[1], range_rotation[0])
-            if range_rotation[0] <= RANGE_ROTATION_MIN:
+            if range_rotation[0] < RANGE_ROTATION_MIN:
                 range_rotation = (RANGE_ROTATION_MIN, range_rotation[1])
-            if range_rotation[1] >= RANGE_ROTATION_MAX:
+                param['range_rotation']['flag'] = 2
+            if range_rotation[1] > RANGE_ROTATION_MAX:
                 range_rotation = (range_rotation[0], RANGE_ROTATION_MAX)
-    else:
-        range_rotation = None
+                param['range_rotation']['flag'] = 2
+    elif range_rotation is not None: param['range_rotation']['flag'] = 1
     
+    # checking range_sheer
     if type(range_sheer) is tuple:
-        if len(range_sheer) != 2:
-            range_sheer = None
+        if len(range_sheer) != 2: param['range_sheer']['flag'] = 1
         else:
             if range_sheer[1] <= range_sheer[0]:
                 range_sheer = (range_sheer[1], range_sheer[0])
-            if range_sheer[0] <= RANGE_SHEER_MIN:
+            if range_sheer[0] < RANGE_SHEER_MIN:
                 range_sheer = (RANGE_SHEER_MIN, range_sheer[1])
-            if range_sheer[1] >= RANGE_SHEER_MAX:
+                param['range_sheer']['flag'] = 2
+            if range_sheer[1] > RANGE_SHEER_MAX:
                 range_sheer = (range_sheer[0], RANGE_SHEER_MAX)
-    else:
-        range_sheer = None
+                param['range_sheer']['flag'] = 2
+    elif range_sheer is not None: param['range_sheer']['flag'] = 1
     
+    # checking range_noise
     if type(range_noise) is tuple:
-        if len(range_noise) != 2:
-            range_noise = None
+        if len(range_noise) != 2: param['range_noise']['flag'] = 1
         else:
             if range_noise[1] <= range_noise[0]:
                 range_noise = (range_noise[1], range_noise[0])
-            if range_noise[0] <= RANGE_NOISE_MIN:
+            if range_noise[0] < RANGE_NOISE_MIN:
                 range_noise = (RANGE_NOISE_MIN, range_noise[1])
-            if range_noise[1] >= RANGE_NOISE_MAX:
+                param['range_noise']['flag'] = 2
+            if range_noise[1] > RANGE_NOISE_MAX:
                 range_noise = (range_noise[0], RANGE_NOISE_MAX)
-    else:
-        range_noise = None
-          
+                param['range_noise']['flag'] = 2
+    elif range_noise is not None: param['range_noise']['flag'] = 1
+    
+    # checking range_brightness
     if type(range_brightness) is tuple:
-        if len(range_brightness) != 2:
-            range_brightness = None
+        if len(range_brightness) != 2: param['range_brightness']['flag'] = 1
         else:
             if range_brightness[1] <= range_brightness[0]:
                 range_brightness = (range_brightness[1], range_brightness[0])
-            if range_brightness[0] <= RANGE_BRIGHTNESS_MIN:
+            if range_brightness[0] < RANGE_BRIGHTNESS_MIN:
                 range_brightness = (RANGE_BRIGHTNESS_MIN, range_brightness[1])
-            if range_brightness[1] >= RANGE_BRIGHTNESS_MAX:
+                param['range_brightness']['flag'] = 2
+            if range_brightness[1] > RANGE_BRIGHTNESS_MAX:
                 range_brightness = (range_brightness[0], RANGE_BRIGHTNESS_MAX)
-    else:
-        range_brightness = None
-        
+                param['range_brightness']['flag'] = 2
+    elif range_brightness is not None: param['range_brightness']['flag'] = 1
+    
+    # checking range_colorfulness
     if type(range_colorfulness) is tuple:
-        if len(range_colorfulness) != 2:
-            range_colorfulness = None
+        if len(range_colorfulness) != 2: param['range_colorfulness']['flag'] = 1
         else:
             if range_colorfulness[1] <= range_colorfulness[0]:
                 range_colorfulness = (range_colorfulness[1], range_colorfulness[0])
-            if range_colorfulness[0] <= RANGE_COLORFULNESS_MIN:
-                range_colorfulness = (RANGE_COLORFULNESS_MIN, range_colorfulness[1])
-            if range_colorfulness[1] >= RANGE_COLORFULNESS_MAX:
-                range_colorfulness = (range_colorfulness[0], RANGE_COLORFULNESS_MAX)
-    else:
-        range_colorfulness = None
+            if range_colorfulness[0] < RANGE_colorfulness_MIN:
+                range_colorfulness = (RANGE_colorfulness_MIN, range_colorfulness[1])
+                param['range_colorfulness']['flag'] = 2
+            if range_colorfulness[1] > RANGE_colorfulness_MAX:
+                range_colorfulness = (range_colorfulness[0], RANGE_colorfulness_MAX)
+                param['range_colorfulness']['flag'] = 2
+    elif range_colorfulness is not None: param['range_colorfulness']['flag'] = 1
     
+    # checking range_color_temperature
     if type(range_color_temperature) is tuple:
-        if len(range_color_temperature) != 2:
-            range_color_temperature = None
+        if len(range_color_temperature) != 2: param['range_color_temperature']['flag'] = 1
         else:
             if range_color_temperature[1] <= range_color_temperature[0]:
                 range_color_temperature = (range_color_temperature[1], range_color_temperature[0])
-            if range_color_temperature[0] <= RANGE_COLOR_TEMPERATURE_MIN:
+            if range_color_temperature[0] < RANGE_COLOR_TEMPERATURE_MIN:
                 range_color_temperature = (RANGE_COLOR_TEMPERATURE_MIN, range_color_temperature[1])
-            if range_color_temperature[1] >= RANGE_COLOR_TEMPERATURE_MAX:
+                param['range_color_temperature']['flag'] = 2
+            if range_color_temperature[1] > RANGE_COLOR_TEMPERATURE_MAX:
                 range_color_temperature = (range_color_temperature[0], RANGE_COLOR_TEMPERATURE_MAX)
-    else:
-        range_color_temperature = None
-          
-    if type(flip_lr) is str: 
-        if (flip_lr != 'all') & (flip_lr != 'random'):
-            flip_lr = None
-    else:
-        flip_lr = None
-            
-    if type(flip_ud) is str: 
-        if (flip_ud != 'all') & (flip_ud != 'random'):
-            flip_ud = None
-    else:
-        flip_ud = None
-            
-    if type(enhance) is str: 
-        if (enhance != 'all') & (enhance != 'random'):
-            enhance = None
-    else:
-        enhance = None
-            
-    if type(bbox_discard_thr) is float: 
-        if bbox_discard_thr<BBOX_DISCARD_THR_MIN: 
-            bbox_discard_thr = BBOX_DISCARD_THR_MIN
-        if bbox_discard_thr>BBOX_DISCARD_THR_MAX: 
-            bbox_discard_thr = BBOX_DISCARD_THR_MAX
-    else:
-        bbox_discard_thr = BBOX_DISCARD_THR_DEFAULT
+                param['range_color_temperature']['flag'] = 2
+    elif range_color_temperature is not None: param['range_color_temperature']['flag'] = 1
     
-
+    # checking flip_lr
+    if ((flip_lr != 'all') & 
+        (flip_lr != 'random') & 
+        (flip_lr is not None)): 
+        param['flip_lr']['flag'] = 1
+    
+    # checking flip_ud
+    if ((flip_ud != 'all') & 
+        (flip_ud != 'random') & 
+        (flip_ud is not None)): 
+        param['flip_ud']['flag'] = 1
+    
+    # checking enhance
+    if ((enhance != 'all') & 
+        (enhance != 'random') & 
+        (enhance is not None)): 
+        param['enhance']['flag'] = 1
+    
+    # checking bbox_discard_thr
+    if type(bbox_discard_thr) is float: 
+        if ((bbox_discard_thr < BBOX_DISCARD_THR_MIN) | 
+            (bbox_discard_thr > BBOX_DISCARD_THR_MAX)): 
+            param['bbox_discard_thr']['flag'] = 1
+    else: param['bbox_discard_thr']['flag'] = 1
+    
+    # checking bboxes
     if type(bboxes) is list:
         for bbox in bboxes:
             if type(bbox) is dict:
@@ -499,19 +542,61 @@ def augment_image(
                     ('left' not in keys) | 
                     ('height' not in keys) | 
                     ('width' not in keys)):
-                    
+                    param['bboxes']['flag'] = 1
+    elif bboxes is not None: param['bboxes']['flag'] = 1
+
+    # adjusting values and printing warnings
+    ls_ranges = [
+        'range_scale', 
+        'range_translation', 
+        'range_rotation', 
+        'range_sheer', 
+        'range_noise', 
+        'range_brightness', 
+        'range_colorfulness', 
+        'range_color_temperature'
+    ]
+    ls_others = [
+        'flip_lr',
+        'flip_ud',
+        'enhance'
+    ]
+    
+    for key, p in param.items():
+        if p['flag'] > 0:
+            
+            # if a flag is raised, fall back to None
+            if p['flag'] == 1:
+                if key == 'range_scale': range_scale = None
+                elif key == 'range_translation': range_translation = None
+                elif key == 'range_rotation': range_rotation = None
+                elif key == 'range_sheer': range_sheer = None
+                elif key == 'range_noise': range_noise = None
+                elif key == 'range_brightness': range_brightness = None
+                elif key == 'range_colorfulness': range_colorfulness = None
+                elif key == 'range_color_temperature': range_color_temperature = None
+                elif key == 'flip_lr': flip_lr = None
+                elif key == 'flip_ud': flip_ud = None
+                elif key == 'enhance': enhance = None
+                elif key == 'bbox_discard_thr': bbox_discard_thr = BBOX_DISCARD_THR_DEFAULT
+                elif key == 'bboxes': bboxes = None
+            
+            # handle warning messages
+            if verbose is True: 
+                if key in ls_ranges:
+                    if p['flag'] == 1: print('WARNING!', key, 'is not a tuple of size 2. Switching to', key, '= None...')
+                    elif p['flag'] == 2: print('WARNING!', key, 'is out of range! Truncating to [', p['min'], ',', p['max'], ']')
+                elif key in ls_others:
+                    print('WARNING!', key, 'is not "all", "random" or None. Switching to', key, '= None...')
+                elif key == 'bbox_discard_thr':
+                    print('WARNING!', key, 'is not a float in the interval [0,1]. Falling back to', key, '=', BBOX_DISCARD_THR_DEFAULT)
+                elif key == 'bboxes':
                     print('Problem with provided bounding boxes!')
                     print('Please make sure you include a list of dictionaries with these fields: "class_id", "top", "left", "height", "width"')
                     print('Ignoring provided bounding boxes...')
-                    bboxes = None          
-    else:
-        bboxes = None
-
-    
+                    
+                
     #------------------------------------------------- 
-    
-    # load image
-    image = imageio.imread(image_filename)
     
     # convert bboxes to x,y coordinates
     if bboxes is not None:
@@ -705,7 +790,7 @@ def augment_image(
         dc_transf['Rotation'] = np.degrees(param_rot[i])
         dc_transf['Sheer'] = np.degrees(param_sheer[i])
         dc_transf['Noise'] = param_noise[i]
-        dc_transf['Colorfulness'] = param_colorfulness[i]
+        dc_transf['colorfulness'] = param_colorfulness[i]
         dc_transf['Color_Temperature'] = param_color_temperature[i]
         dc_transf['Brightness'] = param_gain[i]
         dc_transf['Flip_lr'] = False
@@ -1042,8 +1127,8 @@ def augment_image(
                   dc_augm['Transformations'][i]['Noise'])
             print('Brightness:', 
                   dc_augm['Transformations'][i]['Brightness'])
-            print('Colorfulness:', 
-                  dc_augm['Transformations'][i]['Colorfulness'])
+            print('colorfulness:', 
+                  dc_augm['Transformations'][i]['colorfulness'])
             print('Color Temperature:', 
                   dc_augm['Transformations'][i]['Color_Temperature'])
             print('Enhance:', 
