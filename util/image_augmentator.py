@@ -29,7 +29,7 @@ from skimage.util import img_as_float
 
 
 def adjust_image_colorfulness(image, degree):
-    # adjusts the colorfullness of an image according to the degree
+    # adjusts the colorfulness of an image according to the degree
     
     image = img_as_float(image)  # [0,1]
     image_gray = rgb2gray(image)  # [0,1]
@@ -152,7 +152,7 @@ def augment_image(
         range_sheer=None,
         range_noise=None,
         range_brightness=None,
-        range_colorfullness=None,
+        range_colorfulness=None,
         range_color_temperature=None,
         flip_lr = None,
         flip_ud = None,
@@ -164,9 +164,9 @@ def augment_image(
     
     '''
     ---------------------------------------------------------------------------
-      Functiont that generates random affine augmentations for a given image
+      Function that generates random affine augmentations for a given image
     ---------------------------------------------------------------------------
-    The function apply affine distortions on a given image and generates many
+    The function applies affine distortions on a given image and generates many
     random variations of it. If bounding boxes are provided, then they are also
     transformed to the new distorted image and returned back. The function is
     based on the scikit-image library.
@@ -272,8 +272,8 @@ def augment_image(
     RANGE_NOISE_MAX = 3
     RANGE_BRIGHTNESS_MIN = 0.1
     RANGE_BRIGHTNESS_MAX = 10
-    RANGE_COLORFULLNESS_MIN = 0.0
-    RANGE_COLORFULLNESS_MAX = 5
+    RANGE_COLORFULNESS_MIN = 0.0
+    RANGE_COLORFULNESS_MAX = 5
     RANGE_COLOR_TEMPERATURE_MIN = -1
     RANGE_COLOR_TEMPERATURE_MAX = 1
     BBOX_DISCARD_THR_MIN = 0
@@ -354,18 +354,18 @@ def augment_image(
     else:
         range_brightness = None
         
-    if type(range_colorfullness) is tuple:
-        if len(range_colorfullness) != 2:
-            range_colorfullness = None
+    if type(range_colorfulness) is tuple:
+        if len(range_colorfulness) != 2:
+            range_colorfulness = None
         else:
-            if range_colorfullness[1] <= range_colorfullness[0]:
-                range_colorfullness = (range_colorfullness[1], range_colorfullness[0])
-            if range_colorfullness[0] <= RANGE_COLORFULLNESS_MIN:
-                range_colorfullness = (RANGE_COLORFULLNESS_MIN, range_colorfullness[1])
-            if range_colorfullness[1] >= RANGE_COLORFULLNESS_MAX:
-                range_colorfullness = (range_colorfullness[0], RANGE_COLORFULLNESS_MAX)
+            if range_colorfulness[1] <= range_colorfulness[0]:
+                range_colorfulness = (range_colorfulness[1], range_colorfulness[0])
+            if range_colorfulness[0] <= RANGE_COLORFULNESS_MIN:
+                range_colorfulness = (RANGE_COLORFULNESS_MIN, range_colorfulness[1])
+            if range_colorfulness[1] >= RANGE_COLORFULNESS_MAX:
+                range_colorfulness = (range_colorfulness[0], RANGE_COLORFULNESS_MAX)
     else:
-        range_colorfullness = None
+        range_colorfulness = None
     
     if type(range_color_temperature) is tuple:
         if len(range_color_temperature) != 2:
@@ -525,14 +525,14 @@ def augment_image(
             high=1, 
             size=how_many
             )
-    if range_colorfullness is not None:
-        param_colorfullness = np.random.uniform(
-            low=range_colorfullness[0], 
-            high=range_colorfullness[1], 
+    if range_colorfulness is not None:
+        param_colorfulness = np.random.uniform(
+            low=range_colorfulness[0], 
+            high=range_colorfulness[1], 
             size=how_many
             )
     else:
-        param_colorfullness = np.random.uniform(
+        param_colorfulness = np.random.uniform(
             low=1, 
             high=1, 
             size=how_many
@@ -586,10 +586,10 @@ def augment_image(
             degree=param_color_temperature[i]
         )
         
-        # add colorfullness variations
+        # add colorfulness variations
         image_transformed = adjust_image_colorfulness(
             image_transformed, 
-            degree=param_colorfullness[i]
+            degree=param_colorfulness[i]
         )
         
         # add gaussian noise
@@ -616,7 +616,7 @@ def augment_image(
         dc_transf['Rotation'] = np.degrees(param_rot[i])
         dc_transf['Sheer'] = np.degrees(param_sheer[i])
         dc_transf['Noise'] = param_noise[i]
-        dc_transf['Colorfullness'] = param_colorfullness[i]
+        dc_transf['Colorfulness'] = param_colorfulness[i]
         dc_transf['Color_Temperature'] = param_color_temperature[i]
         dc_transf['Brightness'] = param_gain[i]
         dc_transf['Flip_lr'] = False
@@ -982,8 +982,8 @@ def augment_image(
                   dc_augm['Transformations'][i]['Noise'])
             print('Brightness:', 
                   dc_augm['Transformations'][i]['Brightness'])
-            print('Colorfullness:', 
-                  dc_augm['Transformations'][i]['Colorfullness'])
+            print('Colorfulness:', 
+                  dc_augm['Transformations'][i]['Colorfulness'])
             print('Color Temperature:', 
                   dc_augm['Transformations'][i]['Color_Temperature'])
             print('Enhance:', 
