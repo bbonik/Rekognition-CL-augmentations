@@ -142,7 +142,13 @@ def flip_bboxes(ls_bboxes, image_width, image_height, direction='lr'):
 
 
 
-def visualize_image(image, title=None, bboxes=None, max_number_of_classes=None):
+def visualize_image(
+    image, 
+    title=None, 
+    bboxes=None, 
+    max_number_of_classes=None,
+    display = True
+    ):
     """
     ---------------------------------------------------------------------------
            Visualizes an image with or without bounding box detections
@@ -167,7 +173,9 @@ def visualize_image(image, title=None, bboxes=None, max_number_of_classes=None):
     """
     
     # show the image
-    plt.figure()
+    if display is True:
+        plt.figure()
+        
     plt.imshow(
         image, 
         vmin=0, 
@@ -175,7 +183,10 @@ def visualize_image(image, title=None, bboxes=None, max_number_of_classes=None):
         interpolation='bilinear'
     )
     if title is not None:
-        plt.title(title)
+        if display is True:
+            plt.title(title)
+        else:
+            plt.title(title, loc='left')
     plt.axis('off')
     plt.tight_layout(True)
     
@@ -209,7 +220,9 @@ def visualize_image(image, title=None, bboxes=None, max_number_of_classes=None):
                 fontsize=8,
                 color="white",
             )
-    plt.show()
+    
+    if display is True: 
+        plt.show()
 
 
 
@@ -333,8 +346,12 @@ def augment_image(
         bbox_discard_thr, then the new bounding box is discarded (i.e. object 
         lies mostly outside the new image). Values closer to 1 are more strict
         whereas values closer to 0 are more permissive. 
-    display: boolean
+    display: string or True / False
         Show visualizations and details or not.
+        False: no visualizations.
+        True: display images individually.
+        'single': display images individually.
+        'grid': display up to 10 images on a grid.
     verbose: boolean
         Show or not warnings and other messages. 
     
@@ -790,7 +807,7 @@ def augment_image(
         dc_transf['Rotation'] = np.degrees(param_rot[i])
         dc_transf['Sheer'] = np.degrees(param_sheer[i])
         dc_transf['Noise'] = param_noise[i]
-        dc_transf['colorfulness'] = param_colorfulness[i]
+        dc_transf['Colorfulness'] = param_colorfulness[i]
         dc_transf['Color_Temperature'] = param_color_temperature[i]
         dc_transf['Brightness'] = param_gain[i]
         dc_transf['Flip_lr'] = False
@@ -1092,61 +1109,97 @@ def augment_image(
             
     #------------------------------------------------- visualize augmentations
 
-    if display is True:
+    if display is not False:
         
-        # show original image
-        print('\nAugmenting', image_filename.split('/')[-1], end='')
-        print(' [x', end='')
-        print(how_many, end='')
-        if flip_lr=='all': print(' x2', end='')
-        if flip_ud=='all': print(' x2', end='')
-        if enhance=='all': print(' x2', end='')
-        print(']')
-        visualize_image(
-            image, 
-            title='Original', 
-            bboxes=bboxes, 
-            max_number_of_classes=max_number_of_classes
-        )
+        total_figs = len(dc_augm['Images'])
+        if display is True: display = 'single'
+        if ((display == 'grid') & (total_figs > 10)):
+            display == 'single'  # cannot display in grid more than 10 images
         
-        # show augmentations
-        for i,image_transformed in enumerate(dc_augm['Images']):
-        
-            print('\nTransformation for augmentation', i+1)
-            print('Scale:', 
-                  dc_augm['Transformations'][i]['Scale'])
-            print('Translation_x:', 
-                  dc_augm['Transformations'][i]['Translation'][0])
-            print('Translation_y:', 
-                  dc_augm['Transformations'][i]['Translation'][1])
-            print('Rotation:', 
-                  dc_augm['Transformations'][i]['Rotation'])
-            print('Sheer:', 
-                  dc_augm['Transformations'][i]['Sheer'])
-            print('Noise:', 
-                  dc_augm['Transformations'][i]['Noise'])
-            print('Brightness:', 
-                  dc_augm['Transformations'][i]['Brightness'])
-            print('colorfulness:', 
-                  dc_augm['Transformations'][i]['colorfulness'])
-            print('Color Temperature:', 
-                  dc_augm['Transformations'][i]['Color_Temperature'])
-            print('Enhance:', 
-                  dc_augm['Transformations'][i]['Enhance'])
-            print('Flip left->right: ', 
-                  dc_augm['Transformations'][i]['Flip_lr'])
-            print('Flip up->down: ', 
-                  dc_augm['Transformations'][i]['Flip_ud'])
+        if (display == 'single') | (display == 'grid'):
             
+            # show original image
+            print('\nAugmenting', image_filename.split('/')[-1], end='')
+            print(' [x', end='')
+            print(how_many, end='')
+            if flip_lr=='all': print(' x2', end='')
+            if flip_ud=='all': print(' x2', end='')
+            if enhance=='all': print(' x2', end='')
+            print(']')
             visualize_image(
-                image_transformed, 
-                title='Augmented #' + str(i+1), 
-                bboxes=dc_augm['bboxes'][i], 
+                image, 
+                title='Original', 
+                bboxes=bboxes, 
                 max_number_of_classes=max_number_of_classes
             )
             
-            
-    
+            if display == 'grid':
+                depict = False
+                SIZE_FONT = 8
+                WIDTH_LINE = 2
+                DPI = 100
+                BLOCK_SIZE = 5
+                HEIGHT = 17
+                fig = plt.figure(figsize=(total_figs * BLOCK_SIZE, HEIGHT), dpi=DPI)
+            else:
+                depict = True
+        
+            # show augmentations
+            for i,image_transformed in enumerate(dc_augm['Images']):
+                
+                if display == 'grid':
+                    plt.subplot(1, total_figs, i+1)
+                    title = ''
+                    title += '\nAugmentation ' + str(i+1)
+                    title += '\nScale:' + str(dc_augm['Transformations'][i]['Scale'])
+                    title += '\nTranslation_x:' + str(dc_augm['Transformations'][i]['Translation'][0])
+                    title += '\nTranslation_y:' + str(dc_augm['Transformations'][i]['Translation'][1])
+                    title += '\nRotation:' + str(dc_augm['Transformations'][i]['Rotation'])
+                    title += '\nSheer:' + str(dc_augm['Transformations'][i]['Sheer'])
+                    title += '\nNoise:' + str(dc_augm['Transformations'][i]['Noise'])
+                    title += '\nBrightness:' + str(dc_augm['Transformations'][i]['Brightness'])
+                    title += '\nColorfulness:' + str(dc_augm['Transformations'][i]['Colorfulness'])
+                    title += '\nColor Temperature:' + str(dc_augm['Transformations'][i]['Color_Temperature'])
+                    title += '\nEnhance:' + str(dc_augm['Transformations'][i]['Enhance'])
+                    title += '\nFlip left->right:' + str(dc_augm['Transformations'][i]['Flip_lr'])
+                    title += '\nFlip up->down:' + str(dc_augm['Transformations'][i]['Flip_ud'])
+                else:
+                    title = 'Augmentation ' + str(i+1)
+                    print('\nTransformation for augmentation', i+1)
+                    print('Scale:', 
+                          dc_augm['Transformations'][i]['Scale'])
+                    print('Translation_x:', 
+                          dc_augm['Transformations'][i]['Translation'][0])
+                    print('Translation_y:', 
+                          dc_augm['Transformations'][i]['Translation'][1])
+                    print('Rotation:', 
+                          dc_augm['Transformations'][i]['Rotation'])
+                    print('Sheer:', 
+                          dc_augm['Transformations'][i]['Sheer'])
+                    print('Noise:', 
+                          dc_augm['Transformations'][i]['Noise'])
+                    print('Brightness:', 
+                          dc_augm['Transformations'][i]['Brightness'])
+                    print('Colorfulness:', 
+                          dc_augm['Transformations'][i]['Colorfulness'])
+                    print('Color Temperature:', 
+                          dc_augm['Transformations'][i]['Color_Temperature'])
+                    print('Enhance:', 
+                          dc_augm['Transformations'][i]['Enhance'])
+                    print('Flip left->right: ', 
+                          dc_augm['Transformations'][i]['Flip_lr'])
+                    print('Flip up->down: ', 
+                          dc_augm['Transformations'][i]['Flip_ud'])
+                
+
+                visualize_image(
+                    image_transformed, 
+                    title=title, 
+                    bboxes=dc_augm['bboxes'][i], 
+                    max_number_of_classes=max_number_of_classes,
+                    display = depict
+                )
+            plt.show()
     
     if bboxes is None: 
         del dc_augm['bboxes']
