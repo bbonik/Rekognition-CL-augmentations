@@ -11,7 +11,9 @@ handling bounding boxes.
 """
 
 import imageio
+import boto3
 import copy
+import json
 import random
 import numpy as np
 from pathlib import Path
@@ -1217,38 +1219,60 @@ def augment_image(
 
 
 
-# def augment_manifest_file( 
-#     s3_uri_manifest_file,
-#     s3_uri_destination,
-#     gt_task_name,
-#     filename_postfix = 'augm_',
-    
+def augment_manifest_file( 
+    uri_manifest_file,
+    uri_destination,
+    filename_postfix = '_augm_',
     
 
-
-
-
-# ):
-#     # Augment a whole dataset based on its manifest file.
+    ):
+    # Augment a whole dataset based on its manifest file.
     
     
     
-
+    new_manifest = []
+    n_samples_training_augmented = 0
+    n_samples_training_original = 0
+    # class_histogram_train_original = np.zeros(len(CLASS_NAMES), dtype=int)
+    # class_histogram_train_augmented = np.zeros(len(CLASS_NAMES), dtype=int)
     
+    
+    
+    
+    # analyze manifest location
+    if uri_manifest_file[:5] == 's3://':  # if manifest is in S3
+        # parse uri to find bucket and key
+        slash = uri_manifest_file[5:].find('/')
+        bucket = uri_manifest_file[5 : 5+slash]
+        key = uri_manifest_file[5+slash+1:]
+        
+        # read the raw bytes of the manifest file
+        s3 = boto3.client('s3')      
+        raw_string = s3.get_object(Bucket=bucket, Key=key)['Body'].read().decode('utf-8')
 
-#     new_manifest = []
-#     n_samples_training_augmented = 0
-#     n_samples_training_original = 0
-#     class_histogram_train_original = np.zeros(len(CLASS_NAMES), dtype=int)
-#     class_histogram_train_augmented = np.zeros(len(CLASS_NAMES), dtype=int)
+        # convert raw string into a list of strings
+        lines = []
+        new_line = raw_string.find('\n')
+        while new_line != -1:
+            lines.append(raw_string[:new_line+1])
+            raw_string = raw_string[new_line+1:]
+            new_line = raw_string.find('\n')
+    
+    else:  # if manifest is local
+        with open(uri_manifest_file) as f:  # open the manifest file
+            lines = f.readlines()
 
-#     with open(f'{LOCAL_DATASET_FOLDER}/{PREFIX_DATASET}/train-updated.manifest') as f:  # open the manifest file
-#         lines = f.readlines()
-
-#     for line in lines:
-#         line_dict = json.loads(line)  # load one json line (corresponding to one image)
-#         filename_object = Path(line_dict['source-ref'])
-#         filename = str(filename_object.name)  # filename withouth the path
+            
+    # process json lines (corresponding to one image) one by one
+    
+    for line in lines:
+        line_dict = json.loads(line)  # load one json line (corresponding to one image)
+        filename_object = Path(line_dict['source-ref'])
+        filename = str(filename_object.name)  # filename withouth the path
+        
+        print(filename)
+        q = list(line_dict.keys())
+        print(q)
 
 #         # add json line of the original image and count the examples inside it
 #         new_manifest.append(json.dumps(line_dict))
