@@ -10,12 +10,14 @@ handling bounding boxes.
 @author: vasileios vonikakis
 """
 
+import io
 import imageio
 import boto3
 import copy
 import json
 import random
 import numpy as np
+from PIL import Image
 from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -236,7 +238,7 @@ def visualize_image(
 
 
 def augment_image(
-        image_filename,
+        image,
         bboxes = None,
         max_number_of_classes=None,
         how_many=1,
@@ -260,7 +262,7 @@ def augment_image(
     
     '''
     ---------------------------------------------------------------------------
-      Functiont that generates random affine augmentations for a given image
+          Functiont that generates random augmentations for a given image
     ---------------------------------------------------------------------------
     The function apply affine distortions on a given image and generates many
     random variations of it. If bounding boxes are provided, then they are also
@@ -269,9 +271,11 @@ def augment_image(
     
     INPUTS
     ------
-    image_filename: string
-        Filename of the input image. The image can be either color (RGB) or
-        grayscale. If grayscale, then the image will be converted to RGB. 
+    image: numpy array or string
+        If string, then it represents a local image filename that the function
+        will try to open. If numpy array, then the function will use its values 
+        directly. The image can be either color (RGB) or grayscale. If 
+        grayscale, then the image will be converted to RGB. 
     bboxes: list of dictionaries or None
         The list of the given bounding boxes in the image. A bounding box is 
         defined by 5 numbers of a dictionary: {"class_id", "top", "left", 
@@ -367,11 +371,15 @@ def augment_image(
         
     '''
     
-    # load image
-    image = imageio.imread(image_filename)
+    # resolve input image
+    
+    if type(image) is str:
+        image_filename = image
+        image = imageio.imread(image_filename)  # load image
+        
     image_min_dim = min(image.shape[0], image.shape[1])
     if len(image.shape) == 2:
-        image = np.dstack((image, image, image))
+        image = np.dstack((image, image, image))  # grayscale -> RGB
     
     # print(image.shape)
     
@@ -1216,6 +1224,66 @@ def augment_image(
 
 
 
+def load_file(file_uri, file_type):
+    """
+    ---------------------------------------------------------------------------
+           Loads files either from S3 or locally (image or manifest txt)
+    ---------------------------------------------------------------------------
+    
+    INPUTS
+    ------
+    file_uri: string 
+        Location of the file to be loaded. This could be either an S3 URI or 
+        a path to a local file. 
+    file_type: string
+        The type of file to be loaded. Can either be 'image' or 'manifest'
+        txt file. 
+    """
+    
+    if file_uri[:5] == 's3://':  # if manifest is in S3
+        
+        # parse uri to find bucket and key
+        slash = file_uri[5:].find('/')
+        bucket = file_uri[5 : 5+slash]
+        key = file_uri[5+slash+1:]
+        
+        # read the raw bytes of the manifest file
+        s3 = boto3.client('s3')      
+        raw_data = s3.get_object(Bucket=bucket, Key=key)['Body'].read()
+        
+        if file_type == 'manifest':
+            raw_data = raw_data.decode('utf-8')
+            # convert raw string to json lines (list of strings)
+            file_content = []
+            new_line = raw_data.find('\n')
+            while new_line != -1:
+                file_content.append(raw_data[:new_line+1])
+                raw_data = raw_data[new_line+1:]
+                new_line = raw_data.find('\n')
+                
+        elif file_type == 'image':
+            print(type(raw_data))
+            q = Image.open(io.BytesIO(raw_data))
+            file_content = np.array(q)
+            
+        else:
+            print('Problem! Unknown file type!') 
+            print('Parameter file_type can either be "manifest" or "image"!')
+
+    else:  # if file is local
+        
+        if file_type == 'manifest':
+            with open(file_uri) as f:  # open the manifest file
+                file_content = f.readlines()
+        elif file_type == 'image':
+            file_content = imageio.imread(file_uri)
+        else:
+            print('Problem! Unknown file type!') 
+            print('Parameter file_type can either be "manifest" or "image"!')
+       
+    return file_content
+
+
 
 
 
@@ -1223,8 +1291,7 @@ def augment_manifest_file(
     uri_manifest_file,
     uri_destination,
     filename_postfix = '_augm_',
-    
-
+    **augm_param
     ):
     # Augment a whole dataset based on its manifest file.
     
@@ -1237,42 +1304,71 @@ def augment_manifest_file(
     # class_histogram_train_augmented = np.zeros(len(CLASS_NAMES), dtype=int)
     
     
+    lines = load_file(
+        file_uri=uri_manifest_file, 
+        file_type='manifest'
+    )
     
-    
-    # analyze manifest location
-    if uri_manifest_file[:5] == 's3://':  # if manifest is in S3
-        # parse uri to find bucket and key
-        slash = uri_manifest_file[5:].find('/')
-        bucket = uri_manifest_file[5 : 5+slash]
-        key = uri_manifest_file[5+slash+1:]
-        
-        # read the raw bytes of the manifest file
-        s3 = boto3.client('s3')      
-        raw_string = s3.get_object(Bucket=bucket, Key=key)['Body'].read().decode('utf-8')
-
-        # convert raw string into a list of strings
-        lines = []
-        new_line = raw_string.find('\n')
-        while new_line != -1:
-            lines.append(raw_string[:new_line+1])
-            raw_string = raw_string[new_line+1:]
-            new_line = raw_string.find('\n')
-    
-    else:  # if manifest is local
-        with open(uri_manifest_file) as f:  # open the manifest file
-            lines = f.readlines()
-
             
     # process json lines (corresponding to one image) one by one
-    
     for line in lines:
         line_dict = json.loads(line)  # load one json line (corresponding to one image)
         filename_object = Path(line_dict['source-ref'])
         filename = str(filename_object.name)  # filename withouth the path
         
         print(filename)
-        q = list(line_dict.keys())
-        print(q)
+        ls_keys = list(line_dict.keys())
+        print(ls_keys)
+        
+        # understand dictionary keys
+        # assumption: source is fixed and the metadata is always the annotations with a '-metadata' sufix
+        keys_source = 'source-ref'  # this one is fixed
+        keys_metadata = [key for key in ls_keys if 'metadata' in key][0]  # find the one that has metadata in its name
+        keys_annotations = keys_metadata[:keys_metadata.find('-metadata')]  # find the one that has the annotations
+        
+        
+        # augment image
+        
+        # load image from source
+        image = load_file(
+            file_uri=line_dict[keys_source], 
+            file_type='image'
+        )
+        
+        
+        # getting annotations
+        if type(line_dict[keys_annotations]) is dict:
+            if 'annotations' in list(line_dict[keys_annotations].keys()):
+                bboxes = line_dict[keys_annotations]['annotations']
+        else:
+            bboxes = None
+
+
+        
+        augmentations = augment_image(
+            image,
+            bboxes = bboxes,
+            max_number_of_classes=None,
+            how_many=1,
+            random_seed=None,
+            range_scale=None, 
+            range_translation=None,
+            range_rotation=None,
+            range_sheer=None,
+            range_noise=None,
+            range_brightness=None,
+            range_colorfulness=None,
+            range_color_temperature=None,
+            flip_lr = None,
+            flip_ud = None,
+            enhance = None,
+            bbox_truncate = True,
+            bbox_discard_thr = 0.75,
+            display=False,
+            verbose=False
+        )
+        
+        augmentations['Images']
 
 #         # add json line of the original image and count the examples inside it
 #         new_manifest.append(json.dumps(line_dict))
