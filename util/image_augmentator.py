@@ -255,7 +255,7 @@ def augment_image(
         flip_ud = None,
         enhance = None,
         bbox_truncate = True,
-        bbox_discard_thr = 0.75,
+        bbox_discard_thr = 0.85,
         display=False,
         verbose=False
         ):
@@ -1240,14 +1240,14 @@ def load_file(file_uri, file_type):
         txt file. 
     """
     
-    if file_uri[:5] == 's3://':  # if manifest is in S3
+    if file_uri[:5] == 's3://':  # if file is in S3
         
         # parse uri to find bucket and key
         slash = file_uri[5:].find('/')
         bucket = file_uri[5 : 5+slash]
         key = file_uri[5+slash+1:]
         
-        # read the raw bytes of the manifest file
+        # read the raw bytes of the file
         s3 = boto3.client('s3')      
         raw_data = s3.get_object(Bucket=bucket, Key=key)['Body'].read()
         
@@ -1262,7 +1262,6 @@ def load_file(file_uri, file_type):
                 new_line = raw_data.find('\n')
                 
         elif file_type == 'image':
-            print(type(raw_data))
             q = Image.open(io.BytesIO(raw_data))
             file_content = np.array(q)
             
@@ -1287,6 +1286,72 @@ def load_file(file_uri, file_type):
 
 
 
+
+def save_file(file_data, file_uri, file_type):
+    """
+    ---------------------------------------------------------------------------
+            Saves files either to S3 or locally (image or manifest txt)
+    ---------------------------------------------------------------------------
+    
+    INPUTS
+    ------
+    file_uri: string 
+        Location where the file will be saved. This could be either an S3 URI 
+        or a local path to a local file. 
+    file_type: string
+        The type of file to be saved. Can either be 'image' or 'manifest'
+        txt file. 
+    """
+    
+    if file_uri[:5] == 's3://':  # if file is in S3
+        
+        # parse uri to find bucket and key
+        slash = file_uri[5:].find('/')
+        bucket = file_uri[5 : 5+slash]
+        key = file_uri[5+slash+1:]
+        
+        # read the raw bytes of the file
+        s3 = boto3.client('s3')      
+        raw_data = s3.get_object(Bucket=bucket, Key=key)['Body'].read()
+        
+#         if file_type == 'manifest':
+#             raw_data = raw_data.decode('utf-8')
+#             # convert raw string to json lines (list of strings)
+#             file_content = []
+#             new_line = raw_data.find('\n')
+#             while new_line != -1:
+#                 file_content.append(raw_data[:new_line+1])
+#                 raw_data = raw_data[new_line+1:]
+#                 new_line = raw_data.find('\n')
+                
+#         elif file_type == 'image':
+#             https://stackoverflow.com/questions/44043036/how-to-read-image-file-from-s3-bucket-directly-into-memory
+            
+#         else:
+#             print('Problem! Unknown file type!') 
+#             print('Parameter file_type can either be "manifest" or "image"!')
+
+    else:  # if file will be saved locally
+        
+        if file_type == 'manifest':
+            with open(f"{file_uri}/train-augmented.manifest", "w") as f:
+                for line in file_data:
+                    f.write(f"{line}\n")  
+            
+        elif file_type == 'image':
+            imageio.imsave(file_uri, file_data, quality=95)  # save image locally
+        else:
+            print('Problem! Unknown file type!') 
+            print('Parameter file_type can either be "manifest" or "image"!')
+       
+    return file_content
+
+
+
+
+
+
+
 def augment_manifest_file( 
     uri_manifest_file,
     uri_destination,
@@ -1296,12 +1361,12 @@ def augment_manifest_file(
     # Augment a whole dataset based on its manifest file.
     
     
-    
+    # initializations
     new_manifest = []
     n_samples_training_augmented = 0
     n_samples_training_original = 0
-    # class_histogram_train_original = np.zeros(len(CLASS_NAMES), dtype=int)
-    # class_histogram_train_augmented = np.zeros(len(CLASS_NAMES), dtype=int)
+    class_histogram_train_original = np.zeros(len(CLASS_NAMES), dtype=int)
+    class_histogram_train_augmented = np.zeros(len(CLASS_NAMES), dtype=int)
     
     
     lines = load_file(
@@ -1326,8 +1391,13 @@ def augment_manifest_file(
         keys_metadata = [key for key in ls_keys if 'metadata' in key][0]  # find the one that has metadata in its name
         keys_annotations = keys_metadata[:keys_metadata.find('-metadata')]  # find the one that has the annotations
         
-        
-        # augment image
+    
+        # add json line of the original image and count the examples inside it
+        new_manifest.append(json.dumps(line_dict))
+        n_samples_training_original += 1
+        for j,annotation in enumerate(line_dict[keys_annotations]['annotations']):
+            class_histogram_train_original[int(line_dict[keys_annotations]['annotations'][j]['class_id'])] += 1  # counting annotations
+
         
         # load image from source
         image = load_file(
@@ -1335,108 +1405,119 @@ def augment_manifest_file(
             file_type='image'
         )
         
-        
-        # getting annotations
+        # getting the annotations
         if type(line_dict[keys_annotations]) is dict:
             if 'annotations' in list(line_dict[keys_annotations].keys()):
                 bboxes = line_dict[keys_annotations]['annotations']
         else:
             bboxes = None
-
-
         
+        # resolve augmentation parameters
+        ls_keys = list(augm_param.keys())
+        if 'max_number_of_classes' in ls_keys: augm_max_number_of_classes = augm_param['max_number_of_classes']
+        else: augm_max_number_of_classes = None
+        if 'how_many' in ls_keys: augm_how_many = augm_param['how_many']
+        else: augm_how_many = 2
+        if 'random_seed' in ls_keys: augm_random_seed = augm_param['random_seed']
+        else: augm_random_seed = None
+        if 'range_scale' in ls_keys: augm_range_scale = augm_param['range_scale']
+        else: augm_range_scale = None
+        if 'range_translation' in ls_keys: augm_range_translation = augm_param['range_translation']
+        else: augm_range_translation = None
+        if 'range_rotation' in ls_keys: augm_range_rotation = augm_param['range_rotation']
+        else: augm_range_rotation = None
+        if 'range_sheer' in ls_keys: augm_range_sheer = augm_param['range_sheer']
+        else: augm_range_sheer = None
+        if 'range_noise' in ls_keys: augm_range_noise = augm_param['range_noise']
+        else: augm_range_noise = None
+        if 'range_brightness' in ls_keys: augm_range_brightness = augm_param['range_brightness']
+        else: augm_range_brightness = None
+        if 'range_colorfulness' in ls_keys: augm_range_colorfulness = augm_param['range_colorfulness']
+        else: augm_range_colorfulness = None
+        if 'range_color_temperature' in ls_keys: augm_range_color_temperature = augm_param['range_color_temperature']
+        else: augm_range_color_temperature = None
+        if 'flip_lr' in ls_keys: augm_flip_lr = augm_param['flip_lr']
+        else: augm_flip_lr = None
+        if 'flip_ud' in ls_keys: augm_flip_ud = augm_param['flip_ud']
+        else: augm_flip_ud = None
+        if 'enhance' in ls_keys: augm_enhance = augm_param['enhance']
+        else: augm_enhance = None
+        if 'bbox_truncate' in ls_keys: augm_bbox_truncate = augm_param['bbox_truncate']
+        else: augm_bbox_truncate = True
+        if 'bbox_discard_thr' in ls_keys: augm_bbox_discard_thr = augm_param['bbox_discard_thr']
+        else: augm_bbox_discard_thr = 0.85
+        
+            
+
+        # generate augmented images
         augmentations = augment_image(
             image,
             bboxes = bboxes,
-            max_number_of_classes=None,
-            how_many=1,
-            random_seed=None,
-            range_scale=None, 
-            range_translation=None,
-            range_rotation=None,
-            range_sheer=None,
-            range_noise=None,
-            range_brightness=None,
-            range_colorfulness=None,
-            range_color_temperature=None,
-            flip_lr = None,
-            flip_ud = None,
-            enhance = None,
-            bbox_truncate = True,
-            bbox_discard_thr = 0.75,
+            max_number_of_classes=augm_max_number_of_classes,
+            how_many=augm_how_many,
+            random_seed=augm_random_seed,
+            range_scale=augm_range_scale, 
+            range_translation=augm_range_translation,
+            range_rotation=augm_range_rotation,
+            range_sheer=augm_range_sheer,
+            range_noise=augm_range_noise,
+            range_brightness=augm_range_brightness,
+            range_colorfulness=augm_range_colorfulness,
+            range_color_temperature=augm_range_color_temperature,
+            flip_lr = augm_flip_lr,
+            flip_ud = augm_flip_ud,
+            enhance = augm_enhance,
+            bbox_truncate = augm_bbox_truncate,
+            bbox_discard_thr = augm_bbox_discard_thr,
             display=False,
             verbose=False
         )
-        
-        augmentations['Images']
-
-#         # add json line of the original image and count the examples inside it
-#         new_manifest.append(json.dumps(line_dict))
-#         n_samples_training_original += 1
-#         for j,annotation in enumerate(line_dict['retail-object-labeling']['annotations']):
-#             class_histogram_train_original[int(line_dict['retail-object-labeling']['annotations'][j]['class_id'])] += 1  # counting annotations
-
-#         # generate augmented images
-#         print('Augmenting image:',filename)
-#         image_augm = augment_affine(
-#             image_filename=f'{LOCAL_DATASET_FOLDER}/{PREFIX_DATASET}/{filename}',
-#             bboxes =line_dict['retail-object-labeling']['annotations'],
-#             how_many=AUGM_PER_IMAGE,
-#             random_seed=RANDOM_SEED,
-#             range_scale=RANGE_SCALE,
-#             range_translation=RANGE_TRANSLATION,
-#             range_rotation=RANGE_ROTATION,
-#             range_sheer=RANGE_SHEER,
-#             range_noise=RANGE_NOISE,     
-#             range_brightness=RANGE_BRIGHTNESS,   
-#             flip_lr=FLIP_LR,
-#             flip_ud=FLIP_UD,
-#             bbox_truncate = True,
-#             bbox_discard_thr = 0.85,
-#             display=False  # otherwise the notebook will be flooded with images!
-#         )
-
-#         # save augmented images locally
-#         for i,image in enumerate(image_augm['Images']):
-
-#             # new image size of augmented image
-#             image_height = image.shape[0]
-#             image_width = image.shape[1]
-#             if len(image.shape) == 3:
-#                 image_depth = image.shape[2]
-#             else:
-#                 image_depth = 1
-#             line_dict['retail-object-labeling']['image_size'] = [{"width": image_width, "height": image_height, "depth": image_depth}]
-
-#             # augmented image filename
-#             filename_no_extension = str(filename_object.stem)  # filename without extension 
-#             filename_augmented = f'{filename_no_extension}_augm_{str(i+1)}.jpg'
-#             image_augm_filename = f'{LOCAL_AUGMENTED_TRAINSET_FOLDER}/{filename_augmented}'
-#             imageio.imsave(image_augm_filename, image, quality=95)  # save locally
-#             new_filename_s3 = f's3://{BUCKET_NAME}/{PREFIX_PROJECT}/{PREFIX_DATASET}/{filename_augmented}'
-#             line_dict['source-ref'] = new_filename_s3  # add new filename to the manifest file
-
-#             # new image bounding boxes
-#             line_dict['retail-object-labeling']['annotations'] = image_augm['bboxes'][i]
-
-#             # update metadata objects
-#             line_dict['retail-object-labeling-metadata']['objects'] = [{"confidence": 0} for i in range(len(image_augm['bboxes'][i]))]
-
-#             # update class map
-#             ls_classes = [bbox['class_id'] for bbox in image_augm['bboxes'][i]]
-#             unique_classes = set(ls_classes)
-#             dict_new_class_map = { str(cl): CLASS_NAMES[cl] for cl in unique_classes}
-#             line_dict['retail-object-labeling-metadata']['class-map'] = dict_new_class_map
-
-#             # add a new json line for this augmentation image
-#             new_manifest.append(json.dumps(line_dict))
-
-#             n_samples_training_augmented += 1  # count training images
-#             for j,annotation in enumerate(line_dict['retail-object-labeling']['annotations']):
-#                 class_histogram_train_augmented[int(line_dict['retail-object-labeling']['annotations'][j]['class_id'])] += 1  # count annotations
 
 
-#     # save the updated training manifest file locally
-#     with open(f"{LOCAL_AUGMENTED_TRAINSET_FOLDER}/train-augmented.manifest", "w") as f:
-#         for line in new_manifest:
-#             f.write(f"{line}\n")  
+        # go through all the generated images
+        for i,image in enumerate(augmentations['Images']):
+
+            # new image size of augmented image
+            image_height = image.shape[0]
+            image_width = image.shape[1]
+            if len(image.shape) == 3:
+                image_depth = image.shape[2]
+            else:
+                image_depth = 1
+            line_dict[keys_annotations]['image_size'] = [{"width": image_width, "height": image_height, "depth": image_depth}]
+
+            # augmented image filename
+            filename_no_extension = str(filename_object.stem)  # filename without extension 
+            filename_augmented = f'{filename_no_extension}{filename_postfix}{str(i+1)}.jpg'
+            augmentations_filename = f'{uri_destination}/{filename_augmented}'
+            
+            
+            
+            imageio.imsave(augmentations_filename, image, quality=95)  # save locally
+            new_filename_s3 = f's3://{BUCKET_NAME}/{PREFIX_PROJECT}/{PREFIX_DATASET}/{filename_augmented}'
+            line_dict['source-ref'] = new_filename_s3  # add new filename to the manifest file
+
+            # new image bounding boxes
+            line_dict['retail-object-labeling']['annotations'] = augmentations['bboxes'][i]
+
+            # update metadata objects
+            line_dict[keys_metadata]['objects'] = [{"confidence": 0} for i in range(len(augmentations['bboxes'][i]))]  # Nooooooo!!!!
+
+            # update class map
+            ls_classes = [bbox['class_id'] for bbox in augmentations['bboxes'][i]]
+            unique_classes = set(ls_classes)
+            dict_new_class_map = { str(cl): CLASS_NAMES[cl] for cl in unique_classes}
+            line_dict['retail-object-labeling-metadata']['class-map'] = dict_new_class_map
+
+            # add a new json line for this augmentation image
+            new_manifest.append(json.dumps(line_dict))
+
+            n_samples_training_augmented += 1  # count training images
+            for j,annotation in enumerate(line_dict['retail-object-labeling']['annotations']):
+                class_histogram_train_augmented[int(line_dict['retail-object-labeling']['annotations'][j]['class_id'])] += 1  # count annotations
+
+
+    # save the updated training manifest file locally
+    with open(f"{LOCAL_AUGMENTED_TRAINSET_FOLDER}/train-augmented.manifest", "w") as f:
+        for line in new_manifest:
+            f.write(f"{line}\n")  
