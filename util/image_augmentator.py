@@ -1312,29 +1312,49 @@ def save_file(file_data, file_uri, file_type):
         
         # read the raw bytes of the file
         s3 = boto3.client('s3')      
-        raw_data = s3.get_object(Bucket=bucket, Key=key)['Body'].read()
         
-#         if file_type == 'manifest':
-#             raw_data = raw_data.decode('utf-8')
-#             # convert raw string to json lines (list of strings)
-#             file_content = []
-#             new_line = raw_data.find('\n')
-#             while new_line != -1:
-#                 file_content.append(raw_data[:new_line+1])
-#                 raw_data = raw_data[new_line+1:]
-#                 new_line = raw_data.find('\n')
-                
-#         elif file_type == 'image':
-#             https://stackoverflow.com/questions/44043036/how-to-read-image-file-from-s3-bucket-directly-into-memory
+        if file_type == 'manifest':
+            # raw_data = raw_data.decode('utf-8')
+            # # convert raw string to json lines (list of strings)
+            # file_content = []
+            # new_line = raw_data.find('\n')
+            # while new_line != -1:
+            #     file_content.append(raw_data[:new_line+1])
+            #     raw_data = raw_data[new_line+1:]
+            #     new_line = raw_data.find('\n')
             
-#         else:
-#             print('Problem! Unknown file type!') 
-#             print('Parameter file_type can either be "manifest" or "image"!')
+            
+            data_string = ''
+            for d in file_data:
+                data_string += json.dumps(d, ensure_ascii=False)
+                data_string += '\n'
+
+            s3.put_object(
+                 Body=data_string
+                 Bucket=bucket
+                 Key=key
+            )
+                
+        elif file_type == 'image':
+            
+            file_stream = BytesIO()
+            im = Image.fromarray(file_data)
+            im.save(file_stream, format='jpeg')
+            s3.put_object(
+                Body=file_stream.getvalue(), 
+                Bucket=bucket, 
+                Key=key
+            )
+
+            
+        else:
+            print('Problem! Unknown file type!') 
+            print('Parameter file_type can either be "manifest" or "image"!')
 
     else:  # if file will be saved locally
         
         if file_type == 'manifest':
-            with open(f"{file_uri}/train-augmented.manifest", "w") as f:
+            with open(file_uri, "w") as f:
                 for line in file_data:
                     f.write(f"{line}\n")  
             
