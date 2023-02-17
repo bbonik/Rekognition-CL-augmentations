@@ -938,7 +938,8 @@ def augment_image(
                                 'top': y_up_left, 
                                 'width': width_new, 
                                 'height': height_new,
-                                'class_id': bboxes[b]['class_id']
+                                'class_id': bboxes[b]['class_id'],
+                                'original_order': b
                             }
                         )
                 else:  # keep all bboxes
@@ -1330,8 +1331,8 @@ def save_file(file_data, file_uri, file_type):
                 data_string += '\n'
 
             s3.put_object(
-                 Body=data_string
-                 Bucket=bucket
+                 Body=data_string,
+                 Bucket=bucket,
                  Key=key
             )
                 
@@ -1339,7 +1340,7 @@ def save_file(file_data, file_uri, file_type):
             
             file_stream = BytesIO()
             im = Image.fromarray(file_data)
-            im.save(file_stream, format='jpeg')
+            im.save(file_stream, format='jpeg')  # TODO PNG?
             s3.put_object(
                 Body=file_stream.getvalue(), 
                 Bucket=bucket, 
@@ -1363,30 +1364,43 @@ def save_file(file_data, file_uri, file_type):
         else:
             print('Problem! Unknown file type!') 
             print('Parameter file_type can either be "manifest" or "image"!')
-       
-    return file_content
+
+
+
+
+def break_filename(filename):
+    # breaks up a filename to its components
+    file = {}
+    filename_object = Path(filename)  # path + name + extension
+    file['filename_no_path'] = str(filename_object.name)  # name + extension (no path)
+    file['extension'] = str(filename_object.suffix)  # extension (no path, no name)
+    file['filename_no_extension'] = str(filename_object.stem)  # path + name (no extension)
+    file['filename_only'] = str(Path(file['filename_no_path']).stem)  # name (no path, no extension)
+    return file
+    
+    
 
 
 
 
 
-
-
-def augment_manifest_file( 
+def augment_dataset( 
     uri_manifest_file,
     uri_destination,
+    ls_class_names,
     filename_postfix = '_augm_',
     **augm_param
     ):
-    # Augment a whole dataset based on its manifest file.
+    # Augments a whole dataset based on its manifest file.
+    # counts statistics of the augmented labels
     
     
     # initializations
-    new_manifest = []
-    n_samples_training_augmented = 0
-    n_samples_training_original = 0
-    class_histogram_train_original = np.zeros(len(CLASS_NAMES), dtype=int)
-    class_histogram_train_augmented = np.zeros(len(CLASS_NAMES), dtype=int)
+    new_manifest = []  # the new manifest file for the augmented dataset
+    n_samples_augmented = 0
+    n_samples_original = 0
+    class_histogram_original = np.zeros(len(ls_class_names), dtype=int)
+    class_histogram_augmented = np.zeros(len(ls_class_names), dtype=int)
     
     
     lines = load_file(
@@ -1398,80 +1412,101 @@ def augment_manifest_file(
     # process json lines (corresponding to one image) one by one
     for line in lines:
         line_dict = json.loads(line)  # load one json line (corresponding to one image)
-        filename_object = Path(line_dict['source-ref'])
-        filename = str(filename_object.name)  # filename withouth the path
         
-        print(filename)
+        
+        file = break_filename(line_dict['source-ref'])  # filename of each input image
         ls_keys = list(line_dict.keys())
-        print(ls_keys)
+        
+        print(file['filename_no_path'])
+        
+        #TODO: some verbosity messages!
+        #TODO: copy original image!!!!!
+        
         
         # understand dictionary keys
         # assumption: source is fixed and the metadata is always the annotations with a '-metadata' sufix
-        keys_source = 'source-ref'  # this one is fixed
+        keys_source = 'source-ref'  # this one is always fixed
         keys_metadata = [key for key in ls_keys if 'metadata' in key][0]  # find the one that has metadata in its name
         keys_annotations = keys_metadata[:keys_metadata.find('-metadata')]  # find the one that has the annotations
         
-    
+        # understand what type of problem we are dealing with: 
+        # single-label classification / multi-label classification / object detection
+        problem_type = None
+        bboxes = None
+        if type(line_dict[keys_annotations]) is dict:  # check if object-detection
+            if 'annotations' in list(line_dict[keys_annotations].keys()):
+                # check if 'annotations' is a list of dictionaries
+                if type(line_dict[keys_annotations]['annotations']) is list:  
+                    bboxes = line_dict[keys_annotations]['annotations']
+                    problem_type = 'object_detection'
+                    for bbox in bboxes:  # check if each bbox is a dictionary
+                        if type(bbox) is not dict:
+                            bboxes = None
+                            break
+        elif type(line_dict[keys_annotations]) is list:  # check if multi-label
+            problem_type = 'multi_label'
+        elif type(line_dict[keys_annotations]) is int:  # check if single-label
+            problem_type = 'single_label'  
+        else:
+            print('Problem! Unknown type of annotations in the manifest file...')
+        
         # add json line of the original image and count the examples inside it
         new_manifest.append(json.dumps(line_dict))
-        n_samples_training_original += 1
-        for j,annotation in enumerate(line_dict[keys_annotations]['annotations']):
-            class_histogram_train_original[int(line_dict[keys_annotations]['annotations'][j]['class_id'])] += 1  # counting annotations
+        n_samples_original += 1
+        if problem_type == 'object_detection':
+            for bbox in bboxes:
+                class_histogram_original[int(bbox['class_id'])] += 1  # counting object annotations
+        elif problem_type == 'multi_label':
+            for class_id in line_dict[keys_annotations]:
+                class_histogram_original[int(class_id)] += 1  # counting image annotations
+        elif problem_type == 'single_label':
+            class_id = line_dict[keys_annotations]
+            class_histogram_original[int(class_id)] += 1  # counting image annotations
 
-        
         # load image from source
-        image = load_file(
+        image_original = load_file(
             file_uri=line_dict[keys_source], 
             file_type='image'
         )
         
-        # getting the annotations
-        if type(line_dict[keys_annotations]) is dict:
-            if 'annotations' in list(line_dict[keys_annotations].keys()):
-                bboxes = line_dict[keys_annotations]['annotations']
-        else:
-            bboxes = None
-        
         # resolve augmentation parameters
         ls_keys = list(augm_param.keys())
-        if 'max_number_of_classes' in ls_keys: augm_max_number_of_classes = augm_param['max_number_of_classes']
+        if 'max_number_of_classes' in ls_keys: augm_max_number_of_classes = augm_param['max_number_of_classes'][0]
         else: augm_max_number_of_classes = None
-        if 'how_many' in ls_keys: augm_how_many = augm_param['how_many']
-        else: augm_how_many = 2
-        if 'random_seed' in ls_keys: augm_random_seed = augm_param['random_seed']
+        if 'how_many' in ls_keys: augm_how_many = augm_param['how_many'][0]
+        else: augm_how_many = 1
+        if 'random_seed' in ls_keys: augm_random_seed = augm_param['random_seed'][0]
         else: augm_random_seed = None
-        if 'range_scale' in ls_keys: augm_range_scale = augm_param['range_scale']
+        if 'range_scale' in ls_keys: augm_range_scale = augm_param['range_scale'][0]
         else: augm_range_scale = None
-        if 'range_translation' in ls_keys: augm_range_translation = augm_param['range_translation']
+        if 'range_translation' in ls_keys: augm_range_translation = augm_param['range_translation'][0]
         else: augm_range_translation = None
-        if 'range_rotation' in ls_keys: augm_range_rotation = augm_param['range_rotation']
+        if 'range_rotation' in ls_keys: augm_range_rotation = augm_param['range_rotation'][0]
         else: augm_range_rotation = None
-        if 'range_sheer' in ls_keys: augm_range_sheer = augm_param['range_sheer']
+        if 'range_sheer' in ls_keys: augm_range_sheer = augm_param['range_sheer'][0]
         else: augm_range_sheer = None
-        if 'range_noise' in ls_keys: augm_range_noise = augm_param['range_noise']
+        if 'range_noise' in ls_keys: augm_range_noise = augm_param['range_noise'][0]
         else: augm_range_noise = None
-        if 'range_brightness' in ls_keys: augm_range_brightness = augm_param['range_brightness']
+        if 'range_brightness' in ls_keys: augm_range_brightness = augm_param['range_brightness'][0]
         else: augm_range_brightness = None
-        if 'range_colorfulness' in ls_keys: augm_range_colorfulness = augm_param['range_colorfulness']
+        if 'range_colorfulness' in ls_keys: augm_range_colorfulness = augm_param['range_colorfulness'][0]
         else: augm_range_colorfulness = None
-        if 'range_color_temperature' in ls_keys: augm_range_color_temperature = augm_param['range_color_temperature']
+        if 'range_color_temperature' in ls_keys: augm_range_color_temperature = augm_param['range_color_temperature'][0]
         else: augm_range_color_temperature = None
-        if 'flip_lr' in ls_keys: augm_flip_lr = augm_param['flip_lr']
+        if 'flip_lr' in ls_keys: augm_flip_lr = augm_param['flip_lr'][0]
         else: augm_flip_lr = None
-        if 'flip_ud' in ls_keys: augm_flip_ud = augm_param['flip_ud']
+        if 'flip_ud' in ls_keys: augm_flip_ud = augm_param['flip_ud'][0]
         else: augm_flip_ud = None
-        if 'enhance' in ls_keys: augm_enhance = augm_param['enhance']
+        if 'enhance' in ls_keys: augm_enhance = augm_param['enhance'][0]
         else: augm_enhance = None
-        if 'bbox_truncate' in ls_keys: augm_bbox_truncate = augm_param['bbox_truncate']
+        if 'bbox_truncate' in ls_keys: augm_bbox_truncate = augm_param['bbox_truncate'][0]
         else: augm_bbox_truncate = True
-        if 'bbox_discard_thr' in ls_keys: augm_bbox_discard_thr = augm_param['bbox_discard_thr']
+        if 'bbox_discard_thr' in ls_keys: augm_bbox_discard_thr = augm_param['bbox_discard_thr'][0]
         else: augm_bbox_discard_thr = 0.85
         
-            
-
         # generate augmented images
         augmentations = augment_image(
-            image,
+            image_original,
             bboxes = bboxes,
             max_number_of_classes=augm_max_number_of_classes,
             how_many=augm_how_many,
@@ -1496,48 +1531,89 @@ def augment_manifest_file(
 
         # go through all the generated images
         for i,image in enumerate(augmentations['Images']):
-
+            
             # new image size of augmented image
-            image_height = image.shape[0]
-            image_width = image.shape[1]
-            if len(image.shape) == 3:
-                image_depth = image.shape[2]
-            else:
-                image_depth = 1
-            line_dict[keys_annotations]['image_size'] = [{"width": image_width, "height": image_height, "depth": image_depth}]
+            if problem_type == 'object_detection':
+                image_height = image.shape[0]
+                image_width = image.shape[1]
+                if len(image.shape) == 3:
+                    image_depth = image.shape[2]
+                else:
+                    image_depth = 1
+                line_dict[keys_annotations]['image_size'] = [
+                    {
+                    "width": image_width, 
+                    "height": image_height, 
+                    "depth": image_depth
+                    }
+                ]
 
-            # augmented image filename
-            filename_no_extension = str(filename_object.stem)  # filename without extension 
-            filename_augmented = f'{filename_no_extension}{filename_postfix}{str(i+1)}.jpg'
-            augmentations_filename = f'{uri_destination}/{filename_augmented}'
+            # reconstruct filename of augmented image
+            uri_image_augm = f'{uri_destination}/{file["filename_only"]}{filename_postfix}{str(i+1)}{file["extension"]}'
             
             
+            # save augmented image
+            save_file(
+                file_data=image, 
+                file_uri=uri_image_augm, 
+                file_type='image'
+            )
             
-            imageio.imsave(augmentations_filename, image, quality=95)  # save locally
-            new_filename_s3 = f's3://{BUCKET_NAME}/{PREFIX_PROJECT}/{PREFIX_DATASET}/{filename_augmented}'
-            line_dict['source-ref'] = new_filename_s3  # add new filename to the manifest file
+            line_dict[keys_source] = uri_image_augm  # add new filename to the manifest file
 
-            # new image bounding boxes
-            line_dict['retail-object-labeling']['annotations'] = augmentations['bboxes'][i]
+            # update bounding boxes and metadata for the augmented images
+            if problem_type == 'object_detection':
+                
+                # update bounding boxes
+                line_dict[keys_annotations]['annotations'] = augmentations['bboxes'][i]
 
-            # update metadata objects
-            line_dict[keys_metadata]['objects'] = [{"confidence": 0} for i in range(len(augmentations['bboxes'][i]))]  # Nooooooo!!!!
+                # update metadata objects
+                # a list of all the original indices of the discarded objects
+                ls_discarded_indices = [ 
+                    discarded_bbox['original_order'] 
+                    for discarded_bbox 
+                    in augmentations['bboxes_discarded'][i] 
+                ]
+                # throw away any objects coming from discarded objects
+                ls_new_objects = [ 
+                    conf 
+                    for indx,conf 
+                    in enumerate(line_dict[keys_metadata]['objects']) 
+                    if indx not in ls_discarded_indices 
+                ]
+                line_dict[keys_metadata]['objects'] = ls_new_objects  # update
 
-            # update class map
-            ls_classes = [bbox['class_id'] for bbox in augmentations['bboxes'][i]]
-            unique_classes = set(ls_classes)
-            dict_new_class_map = { str(cl): CLASS_NAMES[cl] for cl in unique_classes}
-            line_dict['retail-object-labeling-metadata']['class-map'] = dict_new_class_map
+                # update class map
+                ls_classes = [bbox['class_id'] for bbox in augmentations['bboxes'][i]]
+                unique_classes = set(ls_classes)
+                dict_new_class_map = { str(cl): ls_class_names[cl] for cl in unique_classes}
+                line_dict[keys_metadata]['class-map'] = dict_new_class_map
 
+            # tracking augmentation statistics 
+            n_samples_augmented += 1  # count augmetned images
+            if problem_type == 'object_detection':
+                for bbox in bboxes:
+                    class_histogram_augmented[int(bbox['class_id'])] += 1  # counting object annotations
+            elif problem_type == 'multi_label':
+                for class_id in line_dict[keys_annotations]:
+                    class_histogram_augmented[int(class_id)] += 1  # counting image annotations
+            elif problem_type == 'single_label':
+                class_id == line_dict[keys_annotations]
+                class_histogram_augmented[int(class_id)] += 1  # counting image annotations
+            
             # add a new json line for this augmentation image
             new_manifest.append(json.dumps(line_dict))
 
-            n_samples_training_augmented += 1  # count training images
-            for j,annotation in enumerate(line_dict['retail-object-labeling']['annotations']):
-                class_histogram_train_augmented[int(line_dict['retail-object-labeling']['annotations'][j]['class_id'])] += 1  # count annotations
 
+    
+    
+    # reconstruct the filename of augmented manifest file
+    file = break_filename(uri_manifest_file)
+    uri_manifest_augm = f'{uri_destination}/{file["filename_only"]}{filename_postfix}{file["extension"]}'
 
-    # save the updated training manifest file locally
-    with open(f"{LOCAL_AUGMENTED_TRAINSET_FOLDER}/train-augmented.manifest", "w") as f:
-        for line in new_manifest:
-            f.write(f"{line}\n")  
+    # save the augmented manifest file 
+    save_file(
+        file_data=new_manifest, 
+        file_uri=uri_manifest_augm, 
+        file_type='manifest'
+    )
