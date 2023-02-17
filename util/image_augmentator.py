@@ -1389,10 +1389,14 @@ def augment_dataset(
     uri_destination,
     ls_class_names,
     filename_postfix = '_augm_',
+    include_original=True,
+    verbose = True,
     **augm_param
     ):
     # Augments a whole dataset based on its manifest file.
     # counts statistics of the augmented labels
+    
+    # caereful with the URIs! dont use trailing '/' slashes!
     
     
     # initializations
@@ -1402,27 +1406,21 @@ def augment_dataset(
     class_histogram_original = np.zeros(len(ls_class_names), dtype=int)
     class_histogram_augmented = np.zeros(len(ls_class_names), dtype=int)
     
-    
     lines = load_file(
         file_uri=uri_manifest_file, 
         file_type='manifest'
     )
-    
-            
+      
     # process json lines (corresponding to one image) one by one
-    for line in lines:
-        line_dict = json.loads(line)  # load one json line (corresponding to one image)
-        
-        
+    for l,line in enumerate(lines):
+        line_dict = json.loads(line)  # load one json line
         file = break_filename(line_dict['source-ref'])  # filename of each input image
         ls_keys = list(line_dict.keys())
         
-        print(file['filename_no_path'])
-        
-        #TODO: some verbosity messages!
-        #TODO: copy original image!!!!!
-        
-        
+        if verbose is True:
+            print('Augmenting image', l+1, 'out of', len(lines), '[', round(((l+1)*100)/(len(lines)),2), '%]')
+            # print(file['filename_no_path'])
+
         # understand dictionary keys
         # assumption: source is fixed and the metadata is always the annotations with a '-metadata' sufix
         keys_source = 'source-ref'  # this one is always fixed
@@ -1450,18 +1448,20 @@ def augment_dataset(
         else:
             print('Problem! Unknown type of annotations in the manifest file...')
         
-        # add json line of the original image and count the examples inside it
-        new_manifest.append(json.dumps(line_dict))
+        # statistics about the original images
         n_samples_original += 1
         if problem_type == 'object_detection':
             for bbox in bboxes:
-                class_histogram_original[int(bbox['class_id'])] += 1  # counting object annotations
+                class_histogram_original[int(bbox['class_id'])] += 1  # counting objects
+                if include_original is True: class_histogram_augmented[int(bbox['class_id'])] += 1
         elif problem_type == 'multi_label':
             for class_id in line_dict[keys_annotations]:
-                class_histogram_original[int(class_id)] += 1  # counting image annotations
+                class_histogram_original[int(class_id)] += 1  # counting classes
+                if include_original is True: class_histogram_augmented[int(class_id)] += 1
         elif problem_type == 'single_label':
             class_id = line_dict[keys_annotations]
-            class_histogram_original[int(class_id)] += 1  # counting image annotations
+            class_histogram_original[int(class_id)] += 1  # counting classes
+            if include_original is True: class_histogram_augmented[int(class_id)] += 1
 
         # load image from source
         image_original = load_file(
@@ -1469,6 +1469,17 @@ def augment_dataset(
             file_type='image'
         )
         
+        # add the original image to the augmented dataset
+        if include_original is True:
+            n_samples_augmented += 1
+            new_manifest.append(json.dumps(line_dict))
+            uri_image_orig = f'{uri_destination}/{file["filename_no_path"]}'
+            save_file(
+                file_data=image_original, 
+                file_uri=uri_image_orig, 
+                file_type='image'
+            )
+            
         # resolve augmentation parameters
         ls_keys = list(augm_param.keys())
         if 'max_number_of_classes' in ls_keys: augm_max_number_of_classes = augm_param['max_number_of_classes'][0]
@@ -1528,7 +1539,6 @@ def augment_dataset(
             verbose=False
         )
 
-
         # go through all the generated images
         for i,image in enumerate(augmentations['Images']):
             
@@ -1550,7 +1560,6 @@ def augment_dataset(
 
             # reconstruct filename of augmented image
             uri_image_augm = f'{uri_destination}/{file["filename_only"]}{filename_postfix}{str(i+1)}{file["extension"]}'
-            
             
             # save augmented image
             save_file(
@@ -1604,9 +1613,6 @@ def augment_dataset(
             # add a new json line for this augmentation image
             new_manifest.append(json.dumps(line_dict))
 
-
-    
-    
     # reconstruct the filename of augmented manifest file
     file = break_filename(uri_manifest_file)
     uri_manifest_augm = f'{uri_destination}/{file["filename_only"]}{filename_postfix}{file["extension"]}'
@@ -1617,3 +1623,10 @@ def augment_dataset(
         file_uri=uri_manifest_augm, 
         file_type='manifest'
     )
+    
+    # package statistics
+    stats = {}
+    stats['original'] = {'n_samples': n_samples_original, 'class_hist': class_histogram_original}
+    stats['augmentations'] = {'n_samples': n_samples_augmented, 'class_hist': class_histogram_augmented}
+
+    return stats
