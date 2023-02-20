@@ -45,15 +45,20 @@ def adjust_image_colorfulness(image, degree):
     image_adjusted = image_gray
     image_adjusted = image_adjusted + image_color_delta * degree
     
-    return cast_image_as_uint8(image_adjusted)
+    image_adjusted[image_adjusted>1] = 1
+    image_adjusted[image_adjusted<0] = 0
+    
+    return image_adjusted
 
 
 
 def cast_image_as_uint8(image):
     # converts a float image of [0,1] to an uint8 image of [0,255]
+    
     image *= 255
     image[image>255] = 255
     image[image<0] = 0
+
     return image.astype(np.uint8)
     
 
@@ -90,7 +95,10 @@ def convert_image_temperature(image, degree):
     image[:,:,1] *= g / 255.0
     image[:,:,2] *= b / 255.0
     
-    return cast_image_as_uint8(image)
+    image[image>1] = 1
+    image[image<0] = 0
+    
+    return image
 
 
 
@@ -246,7 +254,7 @@ def augment_image(
         range_scale=None, 
         range_translation=None,
         range_rotation=None,
-        range_sheer=None,
+        range_shear=None,
         range_noise=None,
         range_brightness=None,
         range_colorfulness=None,
@@ -305,7 +313,7 @@ def augment_image(
         Minimum and maximum range for rotating image left/right (in degrees). 
         Value range: float[-360,360], e.g.(-45, 45).
         If None, then this transformation is deactivated.
-    range_sheer: (min, max) tuple of integer, or None
+    range_shear: (min, max) tuple of integer, or None
         Minimum and maximum range for skewing image left/right (in degrees). 
         Value range: float[-360,360], e.g.(-45, 45).
         If None, then this transformation is deactivated.
@@ -380,6 +388,10 @@ def augment_image(
     image_min_dim = min(image.shape[0], image.shape[1])
     if len(image.shape) == 2:
         image = np.dstack((image, image, image))  # grayscale -> RGB
+        
+    if image.shape[2] > 3:  # if PNG (R,G,B,A)
+        image = np.dstack((image[:,:,0], image[:,:,1], image[:,:,2]))  # keep only RGB
+        
     
     # print(image.shape)
     
@@ -392,8 +404,8 @@ def augment_image(
     RANGE_TRANSLATION_MAX = image_min_dim
     RANGE_ROTATION_MIN = -360
     RANGE_ROTATION_MAX = 360
-    RANGE_SHEER_MIN = -360
-    RANGE_SHEER_MAX = 360
+    RANGE_shear_MIN = -360
+    RANGE_shear_MAX = 360
     RANGE_NOISE_MIN = 0.0
     RANGE_NOISE_MAX = 3
     RANGE_BRIGHTNESS_MIN = 0.1
@@ -410,7 +422,7 @@ def augment_image(
         'range_scale': {'flag':0, 'min':RANGE_SCALE_MIN, 'max':RANGE_SCALE_MAX},
         'range_translation': {'flag':0, 'min':RANGE_TRANSLATION_MIN, 'max':RANGE_TRANSLATION_MAX},
         'range_rotation': {'flag':0, 'min':RANGE_ROTATION_MIN, 'max':RANGE_ROTATION_MAX},
-        'range_sheer': {'flag':0, 'min':RANGE_SHEER_MIN, 'max':RANGE_SHEER_MAX},
+        'range_shear': {'flag':0, 'min':RANGE_shear_MIN, 'max':RANGE_shear_MAX},
         'range_noise': {'flag':0, 'min':RANGE_NOISE_MIN, 'max':RANGE_NOISE_MAX},
         'range_brightness': {'flag':0, 'min':RANGE_BRIGHTNESS_MIN, 'max':RANGE_BRIGHTNESS_MAX},
         'range_colorfulness': {'flag':0, 'min':RANGE_colorfulness_MIN, 'max':RANGE_colorfulness_MAX},
@@ -464,19 +476,19 @@ def augment_image(
                 param['range_rotation']['flag'] = 2
     elif range_rotation is not None: param['range_rotation']['flag'] = 1
     
-    # checking range_sheer
-    if type(range_sheer) is tuple:
-        if len(range_sheer) != 2: param['range_sheer']['flag'] = 1
+    # checking range_shear
+    if type(range_shear) is tuple:
+        if len(range_shear) != 2: param['range_shear']['flag'] = 1
         else:
-            if range_sheer[1] <= range_sheer[0]:
-                range_sheer = (range_sheer[1], range_sheer[0])
-            if range_sheer[0] < RANGE_SHEER_MIN:
-                range_sheer = (RANGE_SHEER_MIN, range_sheer[1])
-                param['range_sheer']['flag'] = 2
-            if range_sheer[1] > RANGE_SHEER_MAX:
-                range_sheer = (range_sheer[0], RANGE_SHEER_MAX)
-                param['range_sheer']['flag'] = 2
-    elif range_sheer is not None: param['range_sheer']['flag'] = 1
+            if range_shear[1] <= range_shear[0]:
+                range_shear = (range_shear[1], range_shear[0])
+            if range_shear[0] < RANGE_shear_MIN:
+                range_shear = (RANGE_shear_MIN, range_shear[1])
+                param['range_shear']['flag'] = 2
+            if range_shear[1] > RANGE_shear_MAX:
+                range_shear = (range_shear[0], RANGE_shear_MAX)
+                param['range_shear']['flag'] = 2
+    elif range_shear is not None: param['range_shear']['flag'] = 1
     
     # checking range_noise
     if type(range_noise) is tuple:
@@ -577,7 +589,7 @@ def augment_image(
         'range_scale', 
         'range_translation', 
         'range_rotation', 
-        'range_sheer', 
+        'range_shear', 
         'range_noise', 
         'range_brightness', 
         'range_colorfulness', 
@@ -597,7 +609,7 @@ def augment_image(
                 if key == 'range_scale': range_scale = None
                 elif key == 'range_translation': range_translation = None
                 elif key == 'range_rotation': range_rotation = None
-                elif key == 'range_sheer': range_sheer = None
+                elif key == 'range_shear': range_shear = None
                 elif key == 'range_noise': range_noise = None
                 elif key == 'range_brightness': range_brightness = None
                 elif key == 'range_colorfulness': range_colorfulness = None
@@ -651,7 +663,7 @@ def augment_image(
     
     # degrees to radians
     if range_rotation is not None: range_rotation = np.radians(range_rotation)
-    if range_sheer is not None: range_sheer = np.radians(range_sheer)
+    if range_shear is not None: range_shear = np.radians(range_shear)
     
     # get random values
     if range_scale is not None:
@@ -690,14 +702,14 @@ def augment_image(
             high=0, 
             size=how_many
             )
-    if range_sheer is not None:
-        param_sheer = np.random.uniform(
-            low=range_sheer[0], 
-            high=range_sheer[1], 
+    if range_shear is not None:
+        param_shear = np.random.uniform(
+            low=range_shear[0], 
+            high=range_shear[1], 
             size=how_many
             )
     else:
-        param_sheer = np.random.uniform(
+        param_shear = np.random.uniform(
             low=0, 
             high=0, 
             size=how_many
@@ -766,15 +778,16 @@ def augment_image(
         
         dc_augm['bboxes'].append([])
         dc_augm['bboxes_discarded'].append([])
+        image_transformed = img_as_float(image.copy())
     
         # configure an affine transform based on the random values
         tform = AffineTransform(
                 scale=(param_scale[i],param_scale[i]),          
                 rotation=param_rot[i], 
-                shear=param_sheer[i],
+                shear=param_shear[i],
                 translation=(param_trans[i,0], param_trans[i,1])
                 )
-        
+
         image_transformed = warp(   # warp image (pixel range -> float [0,1])
                 image,       
                 tform.inverse, 
@@ -782,28 +795,32 @@ def augment_image(
                 )
         
         # add color temperature variations
-        image_transformed = convert_image_temperature(
-            image_transformed, 
-            degree=param_color_temperature[i]
-        )
+        if range_color_temperature is not None:
+            image_transformed = convert_image_temperature(
+                image_transformed, 
+                degree=param_color_temperature[i]
+            )
         
         # add colorfulness variations
-        image_transformed = adjust_image_colorfulness(
-            image_transformed, 
-            degree=param_colorfulness[i]
-        )
+        if range_colorfulness is not None:
+            image_transformed = adjust_image_colorfulness(
+                image_transformed, 
+                degree=param_colorfulness[i]
+            )
         
         # add gaussian noise
-        image_transformed = random_noise(
-            image_transformed, 
-            mode='gaussian', 
-            seed=random_seed, 
-            clip=True,
-            var=param_noise[i]
-        )
+        if range_noise is not None:
+            image_transformed = random_noise(
+                image_transformed, 
+                mode='gaussian', 
+                seed=random_seed, 
+                clip=True,
+                var=param_noise[i]
+            )
         
         # add brightness variations
-        image_transformed = image_transformed * param_gain[i]
+        if range_brightness is not None:
+            image_transformed = image_transformed * param_gain[i]
         
         # convert range back to [0,255]
         image_transformed = cast_image_as_uint8(image_transformed)
@@ -815,7 +832,7 @@ def augment_image(
         dc_transf['Scale'] = param_scale[i]
         dc_transf['Translation'] = param_trans[i]
         dc_transf['Rotation'] = np.degrees(param_rot[i])
-        dc_transf['Sheer'] = np.degrees(param_sheer[i])
+        dc_transf['shear'] = np.degrees(param_shear[i])
         dc_transf['Noise'] = param_noise[i]
         dc_transf['Colorfulness'] = param_colorfulness[i]
         dc_transf['Color_Temperature'] = param_color_temperature[i]
@@ -1166,7 +1183,7 @@ def augment_image(
                     title += '\nTranslation_x:' + str(dc_augm['Transformations'][i]['Translation'][0])
                     title += '\nTranslation_y:' + str(dc_augm['Transformations'][i]['Translation'][1])
                     title += '\nRotation:' + str(dc_augm['Transformations'][i]['Rotation'])
-                    title += '\nSheer:' + str(dc_augm['Transformations'][i]['Sheer'])
+                    title += '\nshear:' + str(dc_augm['Transformations'][i]['shear'])
                     title += '\nNoise:' + str(dc_augm['Transformations'][i]['Noise'])
                     title += '\nBrightness:' + str(dc_augm['Transformations'][i]['Brightness'])
                     title += '\nColorfulness:' + str(dc_augm['Transformations'][i]['Colorfulness'])
@@ -1185,8 +1202,8 @@ def augment_image(
                           dc_augm['Transformations'][i]['Translation'][1])
                     print('Rotation:', 
                           dc_augm['Transformations'][i]['Rotation'])
-                    print('Sheer:', 
-                          dc_augm['Transformations'][i]['Sheer'])
+                    print('shear:', 
+                          dc_augm['Transformations'][i]['shear'])
                     print('Noise:', 
                           dc_augm['Transformations'][i]['Noise'])
                     print('Brightness:', 
@@ -1325,20 +1342,35 @@ def save_file(file_data, file_uri, file_type):
             #     new_line = raw_data.find('\n')
             
             
-            data_string = ''
-            for d in file_data:
-                data_string += json.dumps(d, ensure_ascii=False)
-                data_string += '\n'
+#             data_string = ''
+#             for d in file_data:
+#                 data_string += json.dumps(d, ensure_ascii=False)
+#                 data_string += '\n'
 
+#             s3.put_object(
+#                  Body=data_string,
+#                  Bucket=bucket,
+#                  Key=key
+#             )
+            
+            # Convert the list of JSON objects to a string with one object per line.
+            jsonl_string = "\n".join([json.dumps(obj) for obj in file_data])
+
+            # Create a BytesIO object containing the string.
+            jsonl_bytes = io.BytesIO(jsonl_string.encode())
+            
             s3.put_object(
-                 Body=data_string,
-                 Bucket=bucket,
-                 Key=key
+                Body=jsonl_bytes, 
+                Bucket=bucket, 
+                Key=key
             )
+            
+            
+            
                 
         elif file_type == 'image':
             
-            file_stream = BytesIO()
+            file_stream = io.BytesIO()
             im = Image.fromarray(file_data)
             im.save(file_stream, format='jpeg')  # TODO PNG?
             s3.put_object(
@@ -1360,7 +1392,19 @@ def save_file(file_data, file_uri, file_type):
                     f.write(f"{line}\n")  
             
         elif file_type == 'image':
-            imageio.imsave(file_uri, file_data, quality=95)  # save image locally
+            
+            # if image is PNG
+            if (file_uri[-4:] == '.png') | (file_uri[-4:] == '.PNG'):
+                imageio.imsave(
+                    file_uri, 
+                    file_data
+                )
+            else:  # assuming JPG
+                imageio.imsave(
+                    file_uri, 
+                    file_data, 
+                    quality=95
+                )
         else:
             print('Problem! Unknown file type!') 
             print('Parameter file_type can either be "manifest" or "image"!')
@@ -1380,7 +1424,14 @@ def break_filename(filename):
     
     
 
-
+def fix_uri_double_shashes(file_uri):
+    # replaces any double slashes with single ones in an uri
+    if file_uri[:5] == 's3://':  # if file is in S3
+        start = 5
+        fixed_uri = file_uri[:5] + file_uri[5:].replace('//', '/')
+    else:
+        fixed_uri = file_uri.replace('//', '/')
+    return fixed_uri
 
 
 
@@ -1397,6 +1448,7 @@ def augment_dataset(
     # counts statistics of the augmented labels
     
     # caereful with the URIs! dont use trailing '/' slashes!
+    # supported images JPG and PNG
     
     
     # initializations
@@ -1416,7 +1468,7 @@ def augment_dataset(
         line_dict = json.loads(line)  # load one json line
         file = break_filename(line_dict['source-ref'])  # filename of each input image
         ls_keys = list(line_dict.keys())
-        
+
         if verbose is True:
             print('Augmenting image', l+1, 'out of', len(lines), '[', round(((l+1)*100)/(len(lines)),2), '%]')
             # print(file['filename_no_path'])
@@ -1474,6 +1526,7 @@ def augment_dataset(
             n_samples_augmented += 1
             new_manifest.append(json.dumps(line_dict))
             uri_image_orig = f'{uri_destination}/{file["filename_no_path"]}'
+            uri_image_orig = fix_uri_double_shashes(uri_image_orig)
             save_file(
                 file_data=image_original, 
                 file_uri=uri_image_orig, 
@@ -1494,8 +1547,8 @@ def augment_dataset(
         else: augm_range_translation = None
         if 'range_rotation' in ls_keys: augm_range_rotation = augm_param['range_rotation'][0]
         else: augm_range_rotation = None
-        if 'range_sheer' in ls_keys: augm_range_sheer = augm_param['range_sheer'][0]
-        else: augm_range_sheer = None
+        if 'range_shear' in ls_keys: augm_range_shear = augm_param['range_shear'][0]
+        else: augm_range_shear = None
         if 'range_noise' in ls_keys: augm_range_noise = augm_param['range_noise'][0]
         else: augm_range_noise = None
         if 'range_brightness' in ls_keys: augm_range_brightness = augm_param['range_brightness'][0]
@@ -1525,7 +1578,7 @@ def augment_dataset(
             range_scale=augm_range_scale, 
             range_translation=augm_range_translation,
             range_rotation=augm_range_rotation,
-            range_sheer=augm_range_sheer,
+            range_shear=augm_range_shear,
             range_noise=augm_range_noise,
             range_brightness=augm_range_brightness,
             range_colorfulness=augm_range_colorfulness,
@@ -1560,6 +1613,7 @@ def augment_dataset(
 
             # reconstruct filename of augmented image
             uri_image_augm = f'{uri_destination}/{file["filename_only"]}{filename_postfix}{str(i+1)}{file["extension"]}'
+            uri_image_augm = fix_uri_double_shashes(uri_image_augm)
             
             # save augmented image
             save_file(
@@ -1616,6 +1670,7 @@ def augment_dataset(
     # reconstruct the filename of augmented manifest file
     file = break_filename(uri_manifest_file)
     uri_manifest_augm = f'{uri_destination}/{file["filename_only"]}{filename_postfix}{file["extension"]}'
+    uri_manifest_augm = fix_uri_double_shashes(uri_manifest_augm)
 
     # save the augmented manifest file 
     save_file(
