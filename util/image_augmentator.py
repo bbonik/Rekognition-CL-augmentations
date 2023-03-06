@@ -63,6 +63,25 @@ def cast_image_as_uint8(image):
     
 
     
+
+def compress_image(image, compression_level):
+    # Applies JPEG compression on an image's numpy array
+    
+    # Create a Pillow Image object from the input NumPy array
+    img = Image.fromarray(cast_image_as_uint8(image))
+
+    # Set the JPEG quality parameter based on the compression level (0-100)
+    if compression_level > 100: compression_level = 100
+    elif compression_level < 0: compression_level = 0
+    quality = int(100 - compression_level)
+
+    # Compress the image using JPEG algorithm
+    output_buffer = io.BytesIO()
+    img.save(output_buffer, format='JPEG', quality=quality)
+    compressed_img = Image.open(output_buffer)
+    
+    # Convert the compressed image back to a NumPy array and return it
+    return img_as_float(np.array(compressed_img, dtype=np.uint8))  # in [0,1]
     
 
 
@@ -259,6 +278,7 @@ def augment_image(
         range_brightness=None,
         range_colorfulness=None,
         range_color_temperature=None,
+        range_compression=None,
         flip_lr = None,
         flip_ud = None,
         enhance = None,
@@ -333,6 +353,11 @@ def augment_image(
         Minimum and maximum range for color temperature (cool/warm). 
         Value range: float[-1,1], -1=cool, 0=no change, 1=warm, 
         e.g. (-0.5, 1.0). If None, then this transformation is deactivated. 
+    range_compression: (min, max) tuple of int, or None
+        Minimum and maximum range for jpeg compression. 
+        Value range: int[0,100], 0=no compression (best quality), 
+        100=max compression (worst quality) 
+        e.g. (10, 80). If None, then this transformation is deactivated. 
     flip_lr: string or None
         None: no left-right flipping is applied.
         'all': all images are flipped left-to-right and the original version 
@@ -414,6 +439,8 @@ def augment_image(
     RANGE_colorfulness_MAX = 5
     RANGE_COLOR_TEMPERATURE_MIN = -1
     RANGE_COLOR_TEMPERATURE_MAX = 1
+    RANGE_COMPRESSION_MIN = 0
+    RANGE_COMPRESSION_MAX = 100
     BBOX_DISCARD_THR_MIN = 0
     BBOX_DISCARD_THR_MAX = 1
     BBOX_DISCARD_THR_DEFAULT = 0.85
@@ -427,6 +454,7 @@ def augment_image(
         'range_brightness': {'flag':0, 'min':RANGE_BRIGHTNESS_MIN, 'max':RANGE_BRIGHTNESS_MAX},
         'range_colorfulness': {'flag':0, 'min':RANGE_colorfulness_MIN, 'max':RANGE_colorfulness_MAX},
         'range_color_temperature': {'flag':0, 'min':RANGE_COLOR_TEMPERATURE_MIN, 'max':RANGE_COLOR_TEMPERATURE_MAX},
+        'range_compression': {'flag':0, 'min':RANGE_COMPRESSION_MIN, 'max':RANGE_COMPRESSION_MAX},
         'flip_lr': {'flag':0},
         'flip_ud': {'flag':0},
         'enhance': {'flag':0},
@@ -546,6 +574,20 @@ def augment_image(
                 param['range_color_temperature']['flag'] = 2
     elif range_color_temperature is not None: param['range_color_temperature']['flag'] = 1
     
+    # checking range_compression
+    if type(range_compression) is tuple:
+        if len(range_compression) != 2: param['range_compression']['flag'] = 1
+        else:
+            if range_compression[1] <= range_compression[0]:
+                range_compression = (range_compression[1], range_compression[0])
+            if range_compression[0] < RANGE_COMPRESSION_MIN:
+                range_compression = (RANGE_COMPRESSION_MIN, range_compression[1])
+                param['range_compression']['flag'] = 2
+            if range_compression[1] > RANGE_COMPRESSION_MAX:
+                range_compression = (range_compression[0], RANGE_COMPRESSION_MAX)
+                param['range_compression']['flag'] = 2
+    elif range_compression is not None: param['range_compression']['flag'] = 1
+    
     # checking flip_lr
     if ((flip_lr != 'all') & 
         (flip_lr != 'random') & 
@@ -593,7 +635,8 @@ def augment_image(
         'range_noise', 
         'range_brightness', 
         'range_colorfulness', 
-        'range_color_temperature'
+        'range_color_temperature',
+        'range_compression'
     ]
     ls_others = [
         'flip_lr',
@@ -614,6 +657,7 @@ def augment_image(
                 elif key == 'range_brightness': range_brightness = None
                 elif key == 'range_colorfulness': range_colorfulness = None
                 elif key == 'range_color_temperature': range_color_temperature = None
+                elif key == 'range_compression': range_compression = None
                 elif key == 'flip_lr': flip_lr = None
                 elif key == 'flip_ud': flip_ud = None
                 elif key == 'enhance': enhance = None
@@ -762,6 +806,14 @@ def augment_image(
             high=0, 
             size=how_many
             )
+    if range_compression is not None:
+        param_compression = np.random.randint(
+            low=range_compression[0], 
+            high=range_compression[1], 
+            size=how_many
+            )
+    else:
+        param_compression = [None for i in range(how_many)]
     
     #-------------------------------------------- process all image variations
     
@@ -821,6 +873,13 @@ def augment_image(
         # add brightness variations
         if range_brightness is not None:
             image_transformed = image_transformed * param_gain[i]
+            
+        # add compression variations
+        if range_compression is not None:
+            image_transformed = compress_image(
+                image_transformed, 
+                compression_level=param_compression[i]
+            )
         
         # convert range back to [0,255]
         image_transformed = cast_image_as_uint8(image_transformed)
@@ -836,6 +895,7 @@ def augment_image(
         dc_transf['Noise'] = param_noise[i]
         dc_transf['Colorfulness'] = param_colorfulness[i]
         dc_transf['Color_Temperature'] = param_color_temperature[i]
+        dc_transf['JPEG_Compression'] = param_compression[i]
         dc_transf['Brightness'] = param_gain[i]
         dc_transf['Flip_lr'] = False
         dc_transf['Flip_ud'] = False
@@ -1188,6 +1248,7 @@ def augment_image(
                     title += '\nBrightness:' + str(dc_augm['Transformations'][i]['Brightness'])
                     title += '\nColorfulness:' + str(dc_augm['Transformations'][i]['Colorfulness'])
                     title += '\nColor Temperature:' + str(dc_augm['Transformations'][i]['Color_Temperature'])
+                    title += '\nJPEG Compression:' + str(dc_augm['Transformations'][i]['JPEG_Compression'])
                     title += '\nEnhance:' + str(dc_augm['Transformations'][i]['Enhance'])
                     title += '\nFlip left->right:' + str(dc_augm['Transformations'][i]['Flip_lr'])
                     title += '\nFlip up->down:' + str(dc_augm['Transformations'][i]['Flip_ud'])
@@ -1212,6 +1273,8 @@ def augment_image(
                           dc_augm['Transformations'][i]['Colorfulness'])
                     print('Color Temperature:', 
                           dc_augm['Transformations'][i]['Color_Temperature'])
+                    print('JPEG Compression:', 
+                          dc_augm['Transformations'][i]['JPEG_Compression'])
                     print('Enhance:', 
                           dc_augm['Transformations'][i]['Enhance'])
                     print('Flip left->right: ', 
@@ -1579,6 +1642,8 @@ def augment_dataset(
         else: augm_range_colorfulness = None
         if 'range_color_temperature' in ls_keys: augm_range_color_temperature = augm_param['range_color_temperature'][0]
         else: augm_range_color_temperature = None
+        if 'range_compression' in ls_keys: augm_range_compression = augm_param['range_compression'][0]
+        else: augm_range_compression = None
         if 'flip_lr' in ls_keys: augm_flip_lr = augm_param['flip_lr'][0]
         else: augm_flip_lr = None
         if 'flip_ud' in ls_keys: augm_flip_ud = augm_param['flip_ud'][0]
@@ -1605,6 +1670,7 @@ def augment_dataset(
             range_brightness=augm_range_brightness,
             range_colorfulness=augm_range_colorfulness,
             range_color_temperature=augm_range_color_temperature,
+            range_compression=augm_range_compression,
             flip_lr = augm_flip_lr,
             flip_ud = augm_flip_ud,
             enhance = augm_enhance,
